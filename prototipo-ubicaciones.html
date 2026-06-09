@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>WMS Grupal · Ubicaciones — Prototipo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0d1014; --panel:#141a21; --panel2:#1a212b; --line:#28323f;
+    --txt:#e7eef6; --muted:#8a97a8; --muted2:#5f6b7a;
+    --amber:#ffb000; --amber-dim:#3a2e10;
+    --t-picking:#2ea043; --t-pallet:#1f6feb; --t-devo:#f0883e;
+    --t-staging:#a371f7; --t-recep:#2dd4bf; --t-cuar:#f85149;
+    --font-ui:'IBM Plex Sans',ui-sans-serif,-apple-system,Segoe UI,Roboto,sans-serif;
+    --font-mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:var(--font-ui); background:var(--bg); color:var(--txt);
+    display:flex; flex-direction:column; height:100vh; overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  /* fondo con textura sutil */
+  body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+    background:
+      radial-gradient(900px 500px at 85% -10%, rgba(255,176,0,.05), transparent 60%),
+      radial-gradient(700px 500px at 0% 110%, rgba(31,111,235,.06), transparent 60%);}
+
+  header{
+    position:relative;z-index:2; display:flex;align-items:center;gap:14px;
+    padding:12px 18px; border-bottom:1px solid var(--line); background:rgba(20,26,33,.7);
+    backdrop-filter:blur(8px); animation:drop .5s ease both;
+  }
+  .brand{display:flex;align-items:center;gap:11px;min-width:0}
+  .glyph{width:34px;height:34px;border-radius:9px;flex:none;
+    background:linear-gradient(135deg,#1f2937,#0f141a);border:1px solid var(--line);
+    display:grid;place-items:center;font-family:var(--font-mono);font-weight:600;
+    color:var(--amber);font-size:18px;box-shadow:0 0 0 1px rgba(255,176,0,.08) inset}
+  .brand h1{font-size:14px;font-weight:600;letter-spacing:.2px;white-space:nowrap}
+  .brand p{font-size:11px;color:var(--muted);font-family:var(--font-mono);margin-top:1px}
+  .tag{margin-left:auto;font-family:var(--font-mono);font-size:10.5px;color:var(--amber);
+    border:1px solid var(--amber-dim);background:rgba(255,176,0,.06);padding:4px 9px;border-radius:99px;
+    text-transform:uppercase;letter-spacing:1px}
+
+  .stage{position:relative;z-index:1;flex:1;display:flex;min-height:0}
+  .canvasWrap{flex:1;position:relative;min-width:0;background:
+    linear-gradient(0deg,rgba(0,0,0,.25),rgba(0,0,0,0));overflow:hidden}
+  svg{width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+  svg.panning{cursor:grabbing}
+
+  /* toolbar flotante */
+  .toolbar{position:absolute;top:14px;left:14px;right:14px;z-index:3;display:flex;
+    flex-wrap:wrap;gap:8px;align-items:center;animation:drop .55s .05s ease both}
+  .btn{font-family:var(--font-ui);font-size:12.5px;font-weight:500;color:var(--txt);
+    background:var(--panel2);border:1px solid var(--line);padding:8px 13px;border-radius:9px;
+    cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:.16s;white-space:nowrap}
+  .btn:hover{transform:translateY(-1px);border-color:#3a4757;background:#1f2832}
+  .btn:active{transform:translateY(0)}
+  .btn.primary{background:linear-gradient(180deg,#ffc23d,#ff9e00);color:#1a1304;border-color:#ffb000;font-weight:600}
+  .btn.primary:hover{box-shadow:0 6px 18px rgba(255,176,0,.25)}
+  .btn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2}
+  .zoomers{margin-left:auto;display:flex;gap:6px}
+  .icobtn{width:34px;height:34px;padding:0;justify-content:center}
+
+  /* leyenda de tipos */
+  .legend{position:absolute;left:14px;bottom:14px;z-index:3;display:flex;flex-wrap:wrap;gap:6px;
+    max-width:calc(100% - 28px);animation:drop .6s .1s ease both}
+  .chip{font-family:var(--font-mono);font-size:11px;display:inline-flex;align-items:center;gap:6px;
+    padding:5px 9px;border-radius:8px;background:var(--panel);border:1px solid var(--line);cursor:pointer;
+    transition:.15s;user-select:none}
+  .chip:hover{border-color:#3a4757}
+  .chip.off{opacity:.38}
+  .chip .dot{width:10px;height:10px;border-radius:3px}
+  .chip .n{color:var(--muted);font-size:10px}
+
+  /* panel lateral */
+  .panel{width:312px;flex:none;background:var(--panel);border-left:1px solid var(--line);
+    display:flex;flex-direction:column;z-index:2;animation:slidein .5s .05s ease both}
+  .panel .head{padding:14px 16px;border-bottom:1px solid var(--line)}
+  .panel .head h2{font-size:12px;text-transform:uppercase;letter-spacing:1.3px;color:var(--muted)}
+  .panel .body{padding:16px;overflow:auto;flex:1}
+  .empty{color:var(--muted2);font-size:13px;line-height:1.7;text-align:center;margin-top:40px;
+    font-family:var(--font-mono)}
+  .empty b{color:var(--muted);display:block;margin-bottom:6px}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:11px;color:var(--muted);margin-bottom:6px;
+    text-transform:uppercase;letter-spacing:.6px}
+  .field input,.field select{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--txt);
+    border-radius:8px;padding:9px 11px;font-family:var(--font-mono);font-size:13px;outline:none;transition:.15s}
+  .field input:focus,.field select:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(255,176,0,.12)}
+  .row{display:flex;gap:10px}.row>*{flex:1}
+  .divider{height:1px;background:var(--line);margin:18px 0}
+  .sub-h{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--amber);margin-bottom:10px;
+    display:flex;align-items:center;gap:7px}
+  .hint{font-size:11px;color:var(--muted2);font-family:var(--font-mono);line-height:1.6;margin-top:8px}
+  .danger{background:rgba(248,81,73,.08);border-color:rgba(248,81,73,.3);color:#ff8a82}
+  .danger:hover{background:rgba(248,81,73,.16)}
+  .full{width:100%;justify-content:center}
+
+  /* modal json */
+  .modal{position:fixed;inset:0;z-index:10;display:none;place-items:center;
+    background:rgba(5,7,10,.7);backdrop-filter:blur(4px)}
+  .modal.show{display:grid;animation:fade .2s ease}
+  .card{width:min(560px,92vw);max-height:82vh;background:var(--panel);border:1px solid var(--line);
+    border-radius:14px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.5)}
+  .card .h{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}
+  .card .h h3{font-size:13px;font-family:var(--font-mono)}
+  .card textarea{flex:1;min-height:340px;background:var(--bg);color:#bfe6c9;border:none;outline:none;
+    padding:16px;font-family:var(--font-mono);font-size:12px;line-height:1.55;resize:none}
+  .card .f{padding:12px 16px;border-top:1px solid var(--line);display:flex;gap:8px;justify-content:flex-end}
+  .x{cursor:pointer;color:var(--muted);font-size:20px;line-height:1;background:none;border:none}
+
+  /* svg rects */
+  .loc{cursor:pointer}
+  .loc rect{transition:filter .15s, stroke .12s}
+  .loc:hover rect{filter:brightness(1.12)}
+  .loc.sel rect{stroke:#fff!important;stroke-width:2.2}
+  .loc text{font-family:var(--font-mono);font-size:11px;fill:#fff;pointer-events:none;font-weight:500}
+  .loc .cap{fill:rgba(255,255,255,.6);font-size:9px}
+  .cont rect{fill:rgba(255,255,255,.02);stroke-dasharray:5 4}
+  .cont text{fill:var(--muted)}
+
+  @keyframes drop{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+  @keyframes slidein{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:none}}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+
+  @media(max-width:860px){
+    .stage{flex-direction:column}
+    .panel{width:auto;border-left:none;border-top:1px solid var(--line);max-height:42vh;animation:none}
+    .canvasWrap{flex:1;min-height:300px}
+    .brand h1{font-size:13px}.tag{display:none}
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="glyph">G</div>
+    <div>
+      <h1>WMS Grupal · Módulo Ubicaciones</h1>
+      <p>diseñador de depósito — prototipo</p>
+    </div>
+  </div>
+  <div class="tag">Prototipo</div>
+</header>
+
+<div class="stage">
+  <div class="canvasWrap">
+    <div class="toolbar">
+      <button class="btn primary" id="addBtn">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>
+        Nueva ubicación
+      </button>
+      <button class="btn" id="jsonBtn">
+        <svg viewBox="0 0 24 24"><path d="M8 3H6a2 2 0 0 0-2 2v4l-1 3 1 3v4a2 2 0 0 0 2 2h2M16 3h2a2 2 0 0 1 2 2v4l1 3-1 3v4a2 2 0 0 1-2 2h-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Ver árbol (JSON)
+      </button>
+      <div class="zoomers">
+        <button class="btn icobtn" id="zoomOut"><svg viewBox="0 0 24 24"><path d="M5 12h14" stroke-linecap="round"/></svg></button>
+        <button class="btn icobtn" id="zoomIn"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg></button>
+        <button class="btn icobtn" id="zoomFit"><svg viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4" stroke-linecap="round"/></svg></button>
+      </div>
+    </div>
+
+    <svg id="svg" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+          <path d="M20 0H0V20" fill="none" stroke="#1a222c" stroke-width="1"/>
+        </pattern>
+        <pattern id="grid100" width="100" height="100" patternUnits="userSpaceOnUse">
+          <rect width="100" height="100" fill="url(#grid)"/>
+          <path d="M100 0H0V100" fill="none" stroke="#222c38" stroke-width="1.4"/>
+        </pattern>
+      </defs>
+      <rect id="bg" x="-2000" y="-2000" width="4000" height="4000" fill="url(#grid100)"/>
+      <g id="world"></g>
+    </svg>
+
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <aside class="panel">
+    <div class="head"><h2 id="panelTitle">Sin selección</h2></div>
+    <div class="body" id="panelBody">
+      <div class="empty">
+        <b>Tocá una ubicación</b>
+        Editá su tipo, capacidad o dividila en celdas más chicas. Arrastrá para moverla.
+      </div>
+    </div>
+  </aside>
+</div>
+
+<div class="modal" id="modal">
+  <div class="card">
+    <div class="h"><h3>Árbol de ubicaciones · estructura ubi_*</h3><button class="x" id="closeModal">&times;</button></div>
+    <textarea id="jsonOut" readonly></textarea>
+    <div class="f">
+      <button class="btn" id="copyJson">Copiar</button>
+      <button class="btn primary" id="okModal">Listo</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const TIPOS = {
+  picking:    {label:'Picking',     color:getCSS('--t-picking')},
+  pallet:     {label:'Pallet',      color:getCSS('--t-pallet')},
+  devoluciones:{label:'Devoluciones',color:getCSS('--t-devo')},
+  staging:    {label:'Staging',     color:getCSS('--t-staging')},
+  recepcion:  {label:'Recepción',   color:getCSS('--t-recep')},
+  cuarentena: {label:'Cuarentena',  color:getCSS('--t-cuar')},
+};
+function getCSS(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim()}
+
+const GRID=20;
+let uid=1;
+const nid=()=> 'u'+(uid++);
+let locs=[];           // {id,parentId,codigo,tipo,cap,x,y,w,h,contenedor}
+let selId=null;
+let hidden={};         // tipos ocultos
+let view={x:-40,y:-40,w:900,h:560};
+
+const svg=document.getElementById('svg');
+const world=document.getElementById('world');
+
+/* ---------- seed de demo ---------- */
+function seed(){
+  locs=[
+    rack('A-01','picking',60,80),
+    rack('A-02','picking',60,180),
+    rack('B-01','pallet',300,80,160,120),
+    rack('DEV-01','devoluciones',300,260,160,110),
+    rack('REC-01','recepcion',540,80,180,90),
+  ];
+  // dividir B-01 en 2x3 para mostrar subdivisión
+  const b=locs.find(l=>l.codigo==='B-01');
+  dividir(b,2,3,false);
+}
+function rack(codigo,tipo,x,y,w=170,h=70){
+  return {id:nid(),parentId:null,codigo,tipo,cap:tipo==='pallet'?2:24,x,y,w,h,contenedor:false};
+}
+
+/* ---------- render ---------- */
+function render(){
+  svg.setAttribute('viewBox',`${view.x} ${view.y} ${view.w} ${view.h}`);
+  world.innerHTML='';
+  // contenedores primero, después hojas
+  const order=[...locs].sort((a,b)=> (b.contenedor?1:0)-(a.contenedor?1:0)? -1: 0);
+  locs.forEach(l=>{
+    if(hidden[l.tipo] && !l.contenedor) return;
+    const g=document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.setAttribute('class','loc'+(l.contenedor?' cont':'')+(l.id===selId?' sel':''));
+    g.dataset.id=l.id;
+    const r=document.createElementNS('http://www.w3.org/2000/svg','rect');
+    r.setAttribute('x',l.x);r.setAttribute('y',l.y);r.setAttribute('width',l.w);r.setAttribute('height',l.h);
+    r.setAttribute('rx',l.contenedor?7:6);
+    if(!l.contenedor){r.setAttribute('fill',hexA(TIPOS[l.tipo].color,.82));r.setAttribute('stroke',TIPOS[l.tipo].color);r.setAttribute('stroke-width','1.4');}
+    else{r.setAttribute('stroke',getCSS('--muted2'));r.setAttribute('stroke-width','1.4');}
+    g.appendChild(r);
+    const t=document.createElementNS('http://www.w3.org/2000/svg','text');
+    t.setAttribute('x',l.x+9);t.setAttribute('y',l.y+19);t.textContent=l.codigo;
+    g.appendChild(t);
+    if(!l.contenedor){
+      const c=document.createElementNS('http://www.w3.org/2000/svg','text');
+      c.setAttribute('class','cap');c.setAttribute('x',l.x+9);c.setAttribute('y',l.y+l.h-8);
+      c.textContent=TIPOS[l.tipo].label+' · cap '+l.cap; g.appendChild(c);
+    }
+    world.appendChild(g);
+  });
+  renderLegend();
+}
+function renderLegend(){
+  const el=document.getElementById('legend');el.innerHTML='';
+  for(const k in TIPOS){
+    const n=locs.filter(l=>l.tipo===k&&!l.contenedor).length;
+    const c=document.createElement('div');
+    c.className='chip'+(hidden[k]?' off':'');
+    c.innerHTML=`<span class="dot" style="background:${TIPOS[k].color}"></span>${TIPOS[k].label} <span class="n">${n}</span>`;
+    c.onclick=()=>{hidden[k]=!hidden[k];render();};
+    el.appendChild(c);
+  }
+}
+function hexA(hex,a){const n=hex.replace('#','');const r=parseInt(n.slice(0,2),16),g=parseInt(n.slice(2,4),16),b=parseInt(n.slice(4,6),16);return `rgba(${r},${g},${b},${a})`}
+
+/* ---------- panel ---------- */
+function selectLoc(id){selId=id;render();renderPanel();}
+function renderPanel(){
+  const body=document.getElementById('panelBody');
+  const title=document.getElementById('panelTitle');
+  const l=locs.find(x=>x.id===selId);
+  if(!l){title.textContent='Sin selección';
+    body.innerHTML='<div class="empty"><b>Tocá una ubicación</b>Editá su tipo, capacidad o dividila en celdas más chicas. Arrastrá para moverla.</div>';return;}
+  title.textContent=l.contenedor?'Contenedor (subdividido)':'Ubicación';
+  let opts='';for(const k in TIPOS)opts+=`<option value="${k}" ${k===l.tipo?'selected':''}>${TIPOS[k].label}</option>`;
+  const childCount=locs.filter(x=>x.parentId===l.id).length;
+  body.innerHTML=`
+    <div class="field"><label>Código</label><input id="f_cod" value="${l.codigo}"></div>
+    ${l.contenedor?
+      `<div class="hint">Esta ubicación fue dividida en <b>${childCount}</b> celdas. Es un contenedor: no almacena stock directamente, lo hacen sus hijas.</div>`
+      :
+      `<div class="row">
+        <div class="field"><label>Tipo (módulo que la usa)</label><select id="f_tipo">${opts}</select></div>
+        <div class="field"><label>Capacidad</label><input id="f_cap" type="number" value="${l.cap}"></div>
+      </div>`}
+    <div class="divider"></div>
+    ${l.contenedor?'':`
+    <div class="sub-h">◢ Dividir en celdas más chicas</div>
+    <div class="row">
+      <div class="field"><label>Filas</label><input id="d_f" type="number" min="1" max="10" value="2"></div>
+      <div class="field"><label>Columnas</label><input id="d_c" type="number" min="1" max="12" value="3"></div>
+    </div>
+    <button class="btn primary full" id="divBtn">Dividir ubicación</button>
+    <div class="hint">Crea N hijas que mosaican el área. El padre queda como contenedor (igual que el "bin sectioning" de los WMS).</div>
+    <div class="divider"></div>`}
+    <button class="btn danger full" id="delBtn">Eliminar ${childCount?'(y sus '+childCount+' hijas)':''}</button>
+  `;
+  const cod=document.getElementById('f_cod');if(cod)cod.oninput=e=>{l.codigo=e.target.value;render();};
+  const tp=document.getElementById('f_tipo');if(tp)tp.onchange=e=>{l.tipo=e.target.value;render();};
+  const cp=document.getElementById('f_cap');if(cp)cp.oninput=e=>{l.cap=+e.target.value||0;render();};
+  const db=document.getElementById('divBtn');if(db)db.onclick=()=>{
+    dividir(l,clamp(+document.getElementById('d_f').value,1,10),clamp(+document.getElementById('d_c').value,1,12),true);
+  };
+  const del=document.getElementById('delBtn');if(del)del.onclick=()=>{borrar(l.id);};
+}
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v||1));
+
+/* ---------- operaciones ---------- */
+function dividir(l,filas,cols,reselect){
+  const gap=6, pad=6;
+  const innerW=l.w-pad*2-gap*(cols-1), innerH=l.h-pad*2-gap*(filas-1);
+  const cw=innerW/cols, ch=innerH/filas;
+  let i=0;
+  for(let r=0;r<filas;r++)for(let c=0;c<cols;c++){
+    i++;
+    locs.push({id:nid(),parentId:l.id,
+      codigo:l.codigo+'-'+String(i).padStart(2,'0'),
+      tipo:l.tipo,cap:Math.max(1,Math.round(l.cap/(filas*cols))),
+      x:l.x+pad+c*(cw+gap), y:l.y+pad+r*(ch+gap), w:cw, h:ch, contenedor:false});
+  }
+  l.contenedor=true;
+  if(reselect){selId=null;renderPanel();}
+  render();
+}
+function borrar(id){
+  const kill=new Set([id]);let grew=true;
+  while(grew){grew=false;locs.forEach(l=>{if(kill.has(l.parentId)&&!kill.has(l.id)){kill.add(l.id);grew=true;}});}
+  locs=locs.filter(l=>!kill.has(l.id));
+  // si el padre se queda sin hijas, vuelve a ser almacenable
+  locs.forEach(p=>{if(p.contenedor && !locs.some(c=>c.parentId===p.id))p.contenedor=false;});
+  selId=null;render();renderPanel();
+}
+function addLoc(){
+  const x=snap(view.x+view.w/2-85), y=snap(view.y+view.h/2-35);
+  const n=locs.filter(l=>!l.parentId).length+1;
+  const l={id:nid(),parentId:null,codigo:'NUEVA-'+String(n).padStart(2,'0'),tipo:'picking',cap:24,x,y,w:170,h:70,contenedor:false};
+  locs.push(l);selectLoc(l.id);
+}
+const snap=v=>Math.round(v/GRID)*GRID;
+
+/* ---------- coordenadas / drag / pan / zoom ---------- */
+function toWorld(ev){
+  const pt=svg.createSVGPoint();pt.x=ev.clientX;pt.y=ev.clientY;
+  const m=svg.getScreenCTM().inverse();const p=pt.matrixTransform(m);return {x:p.x,y:p.y};
+}
+let drag=null, pan=null;
+svg.addEventListener('pointerdown',ev=>{
+  const g=ev.target.closest('.loc');
+  if(g){
+    const l=locs.find(x=>x.id===g.dataset.id);selectLoc(l.id);
+    if(l.contenedor)return; // contenedores no se arrastran (mantienen a sus hijas)
+    const w=toWorld(ev);drag={l,dx:w.x-l.x,dy:w.y-l.y};svg.setPointerCapture(ev.pointerId);
+  }else{
+    const w=toWorld(ev);pan={sx:ev.clientX,sy:ev.clientY,vx:view.x,vy:view.y};
+    svg.classList.add('panning');
+    if(ev.target.id==='bg'){selId=null;renderPanel();render();}
+  }
+});
+svg.addEventListener('pointermove',ev=>{
+  if(drag){const w=toWorld(ev);drag.l.x=snap(w.x-drag.dx);drag.l.y=snap(w.y-drag.dy);render();}
+  else if(pan){const scale=view.w/svg.clientWidth;
+    view.x=pan.vx-(ev.clientX-pan.sx)*scale;view.y=pan.vy-(ev.clientY-pan.sy)*scale;
+    svg.setAttribute('viewBox',`${view.x} ${view.y} ${view.w} ${view.h}`);}
+});
+function endPtr(){drag=null;pan=null;svg.classList.remove('panning');}
+svg.addEventListener('pointerup',endPtr);
+svg.addEventListener('pointercancel',endPtr);
+svg.addEventListener('pointerleave',()=>{if(!drag)endPtr();});
+
+function zoom(f){const cx=view.x+view.w/2,cy=view.y+view.h/2;view.w*=f;view.h*=f;
+  view.x=cx-view.w/2;view.y=cy-view.h/2;render();}
+svg.addEventListener('wheel',ev=>{ev.preventDefault();zoom(ev.deltaY>0?1.1:0.9);},{passive:false});
+function fit(){
+  if(!locs.length){view={x:-40,y:-40,w:900,h:560};return render();}
+  const xs=locs.map(l=>l.x),ys=locs.map(l=>l.y),xe=locs.map(l=>l.x+l.w),ye=locs.map(l=>l.y+l.h);
+  const minx=Math.min(...xs)-60,miny=Math.min(...ys)-60,maxx=Math.max(...xe)+60,maxy=Math.max(...ye)+60;
+  const w=maxx-minx,h=maxy-miny,ar=svg.clientWidth/svg.clientHeight;
+  let vw=w,vh=h; if(w/h>ar)vh=w/ar; else vw=h*ar;
+  view={x:minx-(vw-w)/2,y:miny-(vh-h)/2,w:vw,h:vh};render();
+}
+
+/* ---------- export árbol ---------- */
+function buildTree(){
+  const byParent={};locs.forEach(l=>{(byParent[l.parentId]=byParent[l.parentId]||[]).push(l);});
+  const node=l=>({codigo:l.codigo,tipo:l.contenedor?'(contenedor)':l.tipo,
+    capacidad:l.contenedor?null:l.cap,
+    dimensiones:{x:Math.round(l.x),y:Math.round(l.y),w:Math.round(l.w),h:Math.round(l.h)},
+    hijas:(byParent[l.id]||[]).map(node)});
+  return (byParent[null]||[]).map(node);
+}
+function openJson(){
+  document.getElementById('jsonOut').value=JSON.stringify({ubicaciones:buildTree()},null,2);
+  document.getElementById('modal').classList.add('show');
+}
+
+/* ---------- wire ---------- */
+document.getElementById('addBtn').onclick=addLoc;
+document.getElementById('jsonBtn').onclick=openJson;
+document.getElementById('zoomIn').onclick=()=>zoom(0.85);
+document.getElementById('zoomOut').onclick=()=>zoom(1.18);
+document.getElementById('zoomFit').onclick=fit;
+document.getElementById('closeModal').onclick=document.getElementById('okModal').onclick=
+  ()=>document.getElementById('modal').classList.remove('show');
+document.getElementById('copyJson').onclick=()=>{
+  const ta=document.getElementById('jsonOut');ta.select();
+  try{navigator.clipboard.writeText(ta.value);}catch(e){document.execCommand('copy');}
+  const b=document.getElementById('copyJson');b.textContent='¡Copiado!';setTimeout(()=>b.textContent='Copiar',1200);
+};
+
+seed();
+window.addEventListener('load',()=>{setTimeout(fit,60);});
+window.addEventListener('resize',()=>{render();});
+render();
+</script>
+</body>
+</html>
