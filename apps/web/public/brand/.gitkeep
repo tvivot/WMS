@@ -1,0 +1,3 @@
+# Assets de marca (logo blanco + íconos PWA del "G" de Grupal).
+# icon-192.png / icon-512.png se generan como placeholder con
+# scripts/gen-placeholder-icons.mjs; reemplazar por los reales de Grupal.

@@ -1,0 +1,20 @@
+// Prisma — WMS Grupal. Base MySQL/MariaDB (Hostinger). NO PostgreSQL.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+/// Modelo trivial del esqueleto: la migración inicial crea esta tabla, lo que
+/// prueba que `prisma migrate deploy` corre contra la MySQL de Hostinger.
+/// Se reemplaza por las tablas core_* / dev_* en la siguiente etapa.
+model HealthCheck {
+  id        Int      @id @default(autoincrement())
+  createdAt DateTime @default(now())
+
+  @@map("core_health_check")
+}
