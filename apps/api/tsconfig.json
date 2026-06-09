@@ -10,9 +10,7 @@
     "skipLibCheck": true,
     "types": ["node"],
     "baseUrl": ".",
-    "paths": {
-      "@wms/shared": ["../../packages/shared/dist"]
-    }
+    "paths": {}
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "src/static"]
