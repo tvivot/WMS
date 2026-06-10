@@ -1,9 +1,18 @@
 // Prisma — WMS Grupal. Base MySQL/MariaDB (Hostinger). NO PostgreSQL.
+//
+// Reglas de modularidad (CLAUDE.md):
+//  - core_* es el núcleo transversal (lo usan todos los módulos).
+//  - dev_* es propiedad del módulo Devoluciones.
+//  - Relaciones DENTRO de un módulo: FK de Prisma.
+//  - Relaciones hacia el núcleo (cliente, usuario, producto, transportista) y
+//    hacia OTROS módulos (ubicaciones): se guardan por ID/código SIN FK dura,
+//    se resuelven en código por servicios/puertos. Así una migración de un
+//    módulo no rompe a otro, y la ubicación pasa por UbicacionResolverPort.
 
 generator client {
   provider = "prisma-client-js"
-  // Motor "binary" (proceso aparte) en vez del "library" (Node-API): evita el
-  // panic "timer has gone away" del engine nativo en el shared hosting de Hostinger.
+  // Motor "binary" (proceso aparte): evita el panic "timer has gone away" del
+  // engine nativo Node-API en el shared hosting de Hostinger.
   engineType = "binary"
 }
 
@@ -12,12 +21,276 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/// Modelo trivial del esqueleto: la migración inicial crea esta tabla, lo que
-/// prueba que `prisma migrate deploy` corre contra la MySQL de Hostinger.
-/// Se reemplaza por las tablas core_* / dev_* en la siguiente etapa.
+// ===========================================================================
+//  CORE — núcleo transversal
+// ===========================================================================
+
+model Pais {
+  id        Int      @id @default(autoincrement())
+  codigoIso String   @unique @map("codigo_iso") @db.VarChar(3)
+  nombre    String   @db.VarChar(100)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("core_pais")
+}
+
+model Deposito {
+  id        Int      @id @default(autoincrement())
+  nombre    String   @db.VarChar(150)
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("core_deposito")
+}
+
+model Usuario {
+  id               Int       @id @default(autoincrement())
+  username         String    @unique @db.VarChar(60)
+  email            String?   @unique @db.VarChar(150)
+  nombre           String    @db.VarChar(150)
+  claveHash        String    @map("clave_hash") @db.VarChar(255)
+  activo           Boolean   @default(true)
+  primerIngreso    Boolean   @default(true) @map("primer_ingreso")
+  intentosFallidos Int       @default(0) @map("intentos_fallidos")
+  bloqueadoHasta   DateTime? @map("bloqueado_hasta")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  roles UsuarioRol[]
+
+  @@map("core_usuario")
+}
+
+model Rol {
+  id          Int     @id @default(autoincrement())
+  nombre      String  @unique @db.VarChar(60)
+  descripcion String? @db.VarChar(255)
+  activo      Boolean @default(true)
+
+  permisos RolPermiso[]
+  usuarios UsuarioRol[]
+
+  @@map("core_rol")
+}
+
+model Permiso {
+  id          Int     @id @default(autoincrement())
+  codigo      String  @unique @db.VarChar(60)
+  descripcion String? @db.VarChar(255)
+
+  roles RolPermiso[]
+
+  @@map("core_permiso")
+}
+
+model RolPermiso {
+  rolId     Int @map("rol_id")
+  permisoId Int @map("permiso_id")
+
+  rol     Rol     @relation(fields: [rolId], references: [id], onDelete: Cascade)
+  permiso Permiso @relation(fields: [permisoId], references: [id], onDelete: Cascade)
+
+  @@id([rolId, permisoId])
+  @@map("core_rol_permiso")
+}
+
+model UsuarioRol {
+  usuarioId Int @map("usuario_id")
+  rolId     Int @map("rol_id")
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  rol     Rol     @relation(fields: [rolId], references: [id], onDelete: Cascade)
+
+  @@id([usuarioId, rolId])
+  @@map("core_usuario_rol")
+}
+
+model Cliente {
+  id               Int       @id @default(autoincrement())
+  nroCliente       String    @unique @map("nro_cliente") @db.VarChar(40)
+  nombre           String    @db.VarChar(200)
+  claveHash        String    @map("clave_hash") @db.VarChar(255)
+  primerIngreso    Boolean   @default(true) @map("primer_ingreso")
+  activo           Boolean   @default(true)
+  paisId           Int?      @map("pais_id")
+  depositoId       Int?      @map("deposito_id")
+  intentosFallidos Int       @default(0) @map("intentos_fallidos")
+  bloqueadoHasta   DateTime? @map("bloqueado_hasta")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  @@map("core_cliente")
+}
+
+model Producto {
+  id            Int      @id @default(autoincrement())
+  codigoInterno String   @unique @map("codigo_interno") @db.VarChar(60)
+  titulo        String   @db.VarChar(300)
+  editorial     String?  @db.VarChar(200)
+  autor         String?  @db.VarChar(200)
+  // Unidad base = libro. equivCaja = unidades por caja; equivPallet = cajas por pallet.
+  unidadBase    String   @default("unidad") @map("unidad_base") @db.VarChar(20)
+  equivCaja     Int      @default(1) @map("equiv_caja")
+  equivPallet   Int      @default(1) @map("equiv_pallet")
+  // Lote/serie: reservado, desactivado por defecto (no migrar tablas a futuro).
+  loteHabilitado Boolean @default(false) @map("lote_habilitado")
+  activo        Boolean  @default(true)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  isbns ProductoIsbn[]
+
+  @@map("core_producto")
+}
+
+model ProductoIsbn {
+  id         Int    @id @default(autoincrement())
+  productoId Int    @map("producto_id")
+  isbn       String @unique @db.VarChar(20)
+
+  producto Producto @relation(fields: [productoId], references: [id], onDelete: Cascade)
+
+  @@map("core_producto_isbn")
+}
+
+model Transportista {
+  id       Int     @id @default(autoincrement())
+  nombre   String  @db.VarChar(200)
+  contacto String? @db.VarChar(200)
+  activo   Boolean @default(true)
+
+  @@map("core_transportista")
+}
+
+/// Auditoría inmutable: solo se inserta, nunca se edita (sin updatedAt).
+/// Las referencias van por ID (sin FK) para que el log sobreviva a cambios.
+model Auditoria {
+  id             BigInt   @id @default(autoincrement())
+  actorId        Int?     @map("actor_id")
+  actorTipo      String   @map("actor_tipo") @db.VarChar(20) // usuario | cliente | sistema
+  accion         String   @db.VarChar(60)
+  entidad        String   @db.VarChar(60)
+  entidadId      String   @map("entidad_id") @db.VarChar(60)
+  estadoAnterior String?  @map("estado_anterior") @db.VarChar(60)
+  estadoNuevo    String?  @map("estado_nuevo") @db.VarChar(60)
+  detalle        Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([entidad, entidadId])
+  @@map("core_auditoria")
+}
+
+/// Esqueleto: health check. Se mantiene; el endpoint /api/health usa SELECT 1.
 model HealthCheck {
   id        Int      @id @default(autoincrement())
   createdAt DateTime @default(now())
 
   @@map("core_health_check")
+}
+
+// ===========================================================================
+//  DEVOLUCIONES (dev_*) — Módulo 1
+//  Cross-núcleo (cliente/usuario/producto/transportista/depósito) y ubicaciones
+//  se guardan por ID/código SIN FK dura.
+// ===========================================================================
+
+enum DevEstado {
+  A_APROBAR
+  APROBADO
+  EN_TRANSITO
+  ENTREGADO
+  INGRESO_DEPOSITO
+  PROCESADO
+}
+
+enum DevEstadoControl {
+  NO_CONTROLADO
+  EN_CONTROL
+  CONTROLADO
+}
+
+enum DevActorTipo {
+  usuario
+  cliente
+}
+
+model DevAutorizacion {
+  id            Int       @id @default(autoincrement())
+  estado        DevEstado @default(A_APROBAR)
+  // Referencias al núcleo por ID (sin FK): se resuelven por servicio.
+  clienteId     Int       @map("cliente_id")
+  depositoId    Int       @map("deposito_id")
+  creadoPorId   Int          @map("creado_por_id")
+  creadoPorTipo DevActorTipo @map("creado_por_tipo")
+  transportistaId Int?    @map("transportista_id")
+
+  // Declarado por el cliente
+  bultosDeclarados   Int?     @map("bultos_declarados")
+  pesoTotalDeclarado Decimal? @map("peso_total_declarado") @db.Decimal(10, 3)
+
+  // Registrado en depósito
+  bultosRecibidos Int? @map("bultos_recibidos")
+
+  // Ubicaciones: CÓDIGO string, validado por UbicacionResolverPort (NO FK).
+  ubicacionEspera       String? @map("ubicacion_espera") @db.VarChar(60)
+  ubicacionDestinoBueno String? @map("ubicacion_destino_bueno") @db.VarChar(60)
+  ubicacionDestinoMalo  String? @map("ubicacion_destino_malo") @db.VarChar(60)
+
+  observaciones String?  @db.Text
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  declaraciones DevDeclaracion[]
+  bultos        DevBulto[]
+
+  @@index([estado])
+  @@index([clienteId])
+  @@map("dev_autorizacion")
+}
+
+/// Líneas declaradas por el cliente (lo que devuelve por título).
+model DevDeclaracion {
+  id             Int    @id @default(autoincrement())
+  autorizacionId Int    @map("autorizacion_id")
+  // ISBN escaneado + producto resuelto (por código interno, sin FK al núcleo).
+  isbn           String @db.VarChar(20)
+  productoId     Int?   @map("producto_id")
+  cantidad       Int
+
+  autorizacion DevAutorizacion @relation(fields: [autorizacionId], references: [id], onDelete: Cascade)
+
+  @@index([autorizacionId])
+  @@map("dev_declaracion")
+}
+
+/// Bulto físico: el cliente declara cantidad; depósito pesa cada uno.
+model DevBulto {
+  id             Int              @id @default(autoincrement())
+  autorizacionId Int              @map("autorizacion_id")
+  numero         Int
+  peso           Decimal?         @db.Decimal(10, 3)
+  estadoControl  DevEstadoControl @default(NO_CONTROLADO) @map("estado_control")
+
+  autorizacion DevAutorizacion @relation(fields: [autorizacionId], references: [id], onDelete: Cascade)
+  controles    DevControl[]
+
+  @@unique([autorizacionId, numero])
+  @@index([autorizacionId])
+  @@map("dev_bulto")
+}
+
+/// Control por bulto y por ISBN: cantidad total y cuántas en mal estado
+/// (bueno = cantidad - malEstado). Reconciliación agrega por ISBN.
+model DevControl {
+  id         Int    @id @default(autoincrement())
+  bultoId    Int    @map("bulto_id")
+  isbn       String @db.VarChar(20)
+  productoId Int?   @map("producto_id")
+  cantidad   Int
+  malEstado  Int    @default(0) @map("mal_estado")
+
+  bulto DevBulto @relation(fields: [bultoId], references: [id], onDelete: Cascade)
+
+  @@index([bultoId])
+  @@map("dev_control")
 }

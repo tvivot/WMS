@@ -3,8 +3,12 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { runMigrations } from './migrate';
 
 async function bootstrap(): Promise<void> {
+  // Aplica migraciones pendientes antes de levantar (sin terminal en Hostinger).
+  runMigrations();
+
   const app = await NestFactory.create(AppModule);
 
   // Prefijo global: toda la API vive bajo /api; el resto lo sirve la PWA.
