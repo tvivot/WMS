@@ -1,4 +1,16 @@
-import { IsBoolean, IsInt, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
+  IsBoolean,
+  IsInt,
+  IsOptional,
+  IsString,
+  MaxLength,
+  MinLength,
+  ValidateNested,
+} from 'class-validator';
 
 export class CrearClienteDto {
   @IsString()
@@ -10,6 +22,11 @@ export class CrearClienteDto {
   @MinLength(1)
   @MaxLength(200)
   nombre!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  direccion?: string;
 
   @IsOptional()
   @IsInt()
@@ -27,6 +44,11 @@ export class EditarClienteDto {
   nombre?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  direccion?: string;
+
+  @IsOptional()
   @IsInt()
   paisId?: number;
 
@@ -37,4 +59,35 @@ export class EditarClienteDto {
   @IsOptional()
   @IsBoolean()
   activo?: boolean;
+}
+
+/** Línea de importación desde el sistema externo (integrador). */
+export class ClienteImportDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  nroCliente!: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  nombre!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  direccion?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  activo?: boolean;
+}
+
+export class ClientesImportarDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(1000)
+  @ValidateNested({ each: true })
+  @Type(() => ClienteImportDto)
+  clientes!: ClienteImportDto[];
 }

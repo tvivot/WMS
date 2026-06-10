@@ -2,12 +2,20 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../../prisma/prisma.service';
 import { PasswordService } from '../seguridad/password.service';
 import { generarClave } from '../seguridad/clave.util';
-import { CrearClienteDto, EditarClienteDto } from './dto';
+import { ClienteImportDto, CrearClienteDto, EditarClienteDto } from './dto';
 
 const PUBLICO = {
-  id: true, nroCliente: true, nombre: true, activo: true, primerIngreso: true,
-  paisId: true, depositoId: true, createdAt: true,
+  id: true, nroCliente: true, nombre: true, direccion: true, activo: true,
+  primerIngreso: true, paisId: true, depositoId: true, createdAt: true,
 } as const;
+
+/**
+ * Marcador de "sin clave de portal": no es un hash scrypt válido, por lo que
+ * verificar() siempre da false → el cliente importado NO puede loguear hasta
+ * que un admin le genere clave con reset-clave. Evita correr scrypt (50ms c/u)
+ * para miles de clientes importados que quizá nunca usen el portal.
+ */
+const SIN_CLAVE = 'sin-clave';
 
 @Injectable()
 export class ClientesService {
@@ -23,6 +31,24 @@ export class ClientesService {
     return this.prisma.cliente.findMany({ where, select: PUBLICO, orderBy: { nombre: 'asc' } });
   }
 
+  /**
+   * Búsqueda liviana para autocomplete en formularios: por número o nombre.
+   * Devuelve hasta 10 resultados activos.
+   */
+  async buscar(q: string) {
+    const term = (q ?? '').trim();
+    if (term.length < 2) return [];
+    return this.prisma.cliente.findMany({
+      where: {
+        activo: true,
+        OR: [{ nroCliente: { contains: term } }, { nombre: { contains: term } }],
+      },
+      select: { id: true, nroCliente: true, nombre: true, direccion: true },
+      orderBy: { nombre: 'asc' },
+      take: 10,
+    });
+  }
+
   /** Crea el cliente y devuelve la clave generada UNA sola vez (para entregarla). */
   async crear(dto: CrearClienteDto) {
     const existe = await this.prisma.cliente.findUnique({ where: { nroCliente: dto.nroCliente } });
@@ -32,6 +58,7 @@ export class ClientesService {
       data: {
         nroCliente: dto.nroCliente,
         nombre: dto.nombre,
+        direccion: dto.direccion ?? null,
         claveHash: await this.password.hash(clave),
         paisId: dto.paisId ?? null,
         depositoId: dto.depositoId ?? null,
@@ -40,6 +67,52 @@ export class ClientesService {
       select: PUBLICO,
     });
     return { ...cliente, claveGenerada: clave };
+  }
+
+  /**
+   * Importación masiva desde el sistema externo (integrador): upsert por
+   * nro_cliente. NO toca la clave de clientes existentes; los nuevos quedan
+   * sin clave de portal (se habilita con reset-clave cuando haga falta).
+   */
+  async importar(items: ClienteImportDto[]) {
+    let creados = 0;
+    let actualizados = 0;
+    const errores: { nroCliente: string; error: string }[] = [];
+
+    for (const item of items) {
+      try {
+        const existe = await this.prisma.cliente.findUnique({
+          where: { nroCliente: item.nroCliente },
+          select: { id: true },
+        });
+        if (existe) {
+          await this.prisma.cliente.update({
+            where: { nroCliente: item.nroCliente },
+            data: {
+              nombre: item.nombre,
+              direccion: item.direccion ?? null,
+              ...(item.activo !== undefined ? { activo: item.activo } : {}),
+            },
+          });
+          actualizados++;
+        } else {
+          await this.prisma.cliente.create({
+            data: {
+              nroCliente: item.nroCliente,
+              nombre: item.nombre,
+              direccion: item.direccion ?? null,
+              claveHash: SIN_CLAVE,
+              activo: item.activo ?? true,
+              primerIngreso: true,
+            },
+          });
+          creados++;
+        }
+      } catch (err) {
+        errores.push({ nroCliente: item.nroCliente, error: (err as Error).message.slice(0, 200) });
+      }
+    }
+    return { recibidos: items.length, creados, actualizados, errores };
   }
 
   async editar(id: number, dto: EditarClienteDto) {

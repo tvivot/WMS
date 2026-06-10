@@ -4,7 +4,8 @@ import { Plus } from 'lucide-react';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { PERMISOS, ESTADOS_ORDEN, ESTADO_LABEL, type Estado } from '../../lib/estados';
-import { Card, EmptyState, EstadoBadge, Field, Spinner } from '../../components/ui';
+import { Card, EmptyState, EstadoBadge, Spinner } from '../../components/ui';
+import { ClientePicker, type ClienteOpcion } from '../../components/ClientePicker';
 
 interface Autorizacion {
   id: number;
@@ -18,7 +19,7 @@ export function DevolucionesLista() {
   const { puede, actor } = useAuth();
   const [items, setItems] = useState<Autorizacion[] | null>(null);
   const [creando, setCreando] = useState(false);
-  const [clienteId, setClienteId] = useState('');
+  const [cliente, setCliente] = useState<ClienteOpcion | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const cargar = () => {
@@ -30,11 +31,15 @@ export function DevolucionesLista() {
   const crear = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    if (actor?.tipo !== 'cliente' && !cliente) {
+      setError('Seleccioná un cliente');
+      return;
+    }
     try {
-      const body = actor?.tipo === 'cliente' ? {} : { clienteId: Number(clienteId) };
+      const body = actor?.tipo === 'cliente' ? {} : { clienteId: cliente!.id };
       await api.post('/devoluciones/autorizaciones', body);
       setCreando(false);
-      setClienteId('');
+      setCliente(null);
       cargar();
     } catch (err) {
       setError((err as Error).message);
@@ -68,15 +73,10 @@ export function DevolucionesLista() {
         <Card>
           <form onSubmit={crear} className="flex flex-wrap items-end gap-3">
             {actor?.tipo !== 'cliente' && (
-              <Field label="ID de cliente">
-                <input
-                  className="input w-48"
-                  value={clienteId}
-                  onChange={(e) => setClienteId(e.target.value)}
-                  inputMode="numeric"
-                  required
-                />
-              </Field>
+              <div className="w-full sm:w-96">
+                <label className="label">Cliente (número o nombre)</label>
+                <ClientePicker seleccionado={cliente} onSelect={setCliente} />
+              </div>
             )}
             <button className="btn-accent" type="submit">
               Crear solicitud

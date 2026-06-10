@@ -109,6 +109,7 @@ model Cliente {
   id               Int       @id @default(autoincrement())
   nroCliente       String    @unique @map("nro_cliente") @db.VarChar(40)
   nombre           String    @db.VarChar(200)
+  direccion        String?   @db.VarChar(300)
   claveHash        String    @map("clave_hash") @db.VarChar(255)
   primerIngreso    Boolean   @default(true) @map("primer_ingreso")
   activo           Boolean   @default(true)

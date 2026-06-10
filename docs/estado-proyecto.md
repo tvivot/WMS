@@ -1,4 +1,4 @@
-# Estado del proyecto — WMS Grupal (actualizado 2026-06-09)
+# Estado del proyecto — WMS Grupal (actualizado 2026-06-10)
 
 > **Leer este archivo al iniciar una sesión de trabajo.** Resume qué está construido,
 > cómo funciona el deploy y los errores ya resueltos para NO repetirlos.
@@ -11,6 +11,10 @@
 - **Devoluciones**: máquina de estados completa (`A_APROBAR → … → PROCESADO`), control bulto por bulto, reconciliación por ISBN, `UbicacionResolverPort` (seam), eventos `devolucion.procesada` y `devolucion.estado_cambiado`.
 - **PWA**: marca Grupal, escáner (BarcodeDetector + ZXing + wedge USB), **offline del control** (outbox en localStorage con resync), informes Recharts, nav por permisos.
 - **Calidad**: tests jest 7/7 (`npm test`, incluye test del seam), OpenAPI (`/api/docs` + `npm run openapi` → `docs/openapi.yaml`), CSP + rate limiting (login 10/min → 429).
+- **Integración de clientes (2026-06-10)**: `core_cliente` tiene `direccion`; **import masivo** `POST /api/clientes/import` (upsert por `nro_cliente`, máx 1000, idempotente, NO toca claves; importados quedan sin clave de portal hasta reset) + **autocomplete** `GET /api/clientes/buscar?q=` (número o nombre, máx 10, bloqueado para actores tipo cliente). Manual para el sistema externo: `docs/integraciones/manual-api-clientes.md` (auth = usuario dedicado `integrador` con permiso `cliente.administrar`). Front: `ClientePicker` en el form de nueva devolución.
+
+## ⚠️ INCIDENTE ABIERTO (2026-06-10): producción 503
+El dominio devuelve **503 de LiteSpeed** (el proceso Node no corre); build OK en deploy log. Fix preventivo ya aplicado (listen primero, migración en background). **Falta que el usuario revise**: botón Restart (badge "Running" del dashboard), y los **Runtime logs** (menú del dashboard ≠ log de deploy; o File Manager → `domains/<dominio>/nodejs/stdout.log` / `stderr.log`). El log de build que termina tras `nest build` es NORMAL. Investigación completa hecha con orquestador (causas rankeadas: crash al arranque por env/módulos vs proceso colgado de plataforma → Restart).
 
 ## Hosting / Deploy (Hostinger)
 

@@ -189,6 +189,33 @@ paths:
         "201":
           description: ""
       tags: *a3
+  /api/clientes/buscar:
+    get:
+      operationId: ClientesController_buscar
+      parameters:
+        - name: q
+          required: false
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+      tags: *a3
+  /api/clientes/import:
+    post:
+      operationId: ClientesController_importar
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClientesImportarDto"
+      responses:
+        "201":
+          description: ""
+      tags: *a3
   /api/clientes/{id}:
     put:
       operationId: ClientesController_editar
@@ -613,6 +640,9 @@ components:
       type: object
       properties: {}
     CrearClienteDto:
+      type: object
+      properties: {}
+    ClientesImportarDto:
       type: object
       properties: {}
     EditarClienteDto:

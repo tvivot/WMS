@@ -7,6 +7,7 @@ interface Cliente {
   id: number;
   nroCliente: string;
   nombre: string;
+  direccion: string | null;
   activo: boolean;
   primerIngreso: boolean;
 }
@@ -14,7 +15,7 @@ interface Cliente {
 export function Clientes() {
   const [items, setItems] = useState<Cliente[] | null>(null);
   const [creando, setCreando] = useState(false);
-  const [form, setForm] = useState({ nroCliente: '', nombre: '' });
+  const [form, setForm] = useState({ nroCliente: '', nombre: '', direccion: '' });
   const [cred, setCred] = useState<{ titulo: string; clave: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,9 +29,13 @@ export function Clientes() {
     e.preventDefault();
     setError(null);
     try {
-      const r = await api.post<Cliente & { claveGenerada: string }>('/clientes', form);
+      const r = await api.post<Cliente & { claveGenerada: string }>('/clientes', {
+        nroCliente: form.nroCliente,
+        nombre: form.nombre,
+        direccion: form.direccion || undefined,
+      });
       setCred({ titulo: `Cliente ${r.nroCliente} — clave generada`, clave: r.claveGenerada });
-      setForm({ nroCliente: '', nombre: '' });
+      setForm({ nroCliente: '', nombre: '', direccion: '' });
       setCreando(false);
       cargar();
     } catch (err) {
@@ -63,6 +68,9 @@ export function Clientes() {
             <Field label="Nombre">
               <input className="input w-64" value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} required />
             </Field>
+            <Field label="Dirección">
+              <input className="input w-72" value={form.direccion} onChange={(e) => setForm({ ...form, direccion: e.target.value })} />
+            </Field>
             <button className="btn-accent" type="submit">Crear</button>
             {error && <p className="text-sm text-red-600 w-full">{error}</p>}
           </form>
@@ -77,13 +85,14 @@ export function Clientes() {
         <div className="card overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 text-left">
-              <tr><th className="px-4 py-3 font-medium">Nro</th><th className="px-4 py-3 font-medium">Nombre</th><th className="px-4 py-3 font-medium">Estado</th><th className="px-4 py-3"></th></tr>
+              <tr><th className="px-4 py-3 font-medium">Nro</th><th className="px-4 py-3 font-medium">Nombre</th><th className="px-4 py-3 font-medium">Dirección</th><th className="px-4 py-3 font-medium">Estado</th><th className="px-4 py-3"></th></tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {items.map((c) => (
                 <tr key={c.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3 font-medium tabnum">{c.nroCliente}</td>
                   <td className="px-4 py-3">{c.nombre}</td>
+                  <td className="px-4 py-3 text-slate-500">{c.direccion ?? '—'}</td>
                   <td className="px-4 py-3">
                     <span className={`text-xs font-semibold ${c.activo ? 'text-emerald-700' : 'text-slate-400'}`}>
                       {c.activo ? 'Activo' : 'Inactivo'}{c.primerIngreso ? ' · 1er ingreso' : ''}
