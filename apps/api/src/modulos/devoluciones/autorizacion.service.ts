@@ -109,7 +109,10 @@ export class AutorizacionService {
     if (actor.tipo === 'cliente') {
       clienteId = actor.sub;
       const cli = await this.prisma.cliente.findUnique({ where: { id: clienteId } });
-      depositoId = dto.depositoId ?? cli?.depositoId ?? (await this.depositoPorDefecto());
+      if (!cli || !cli.activo) {
+        throw new BadRequestException('Cliente inactivo: no puede operar en el WMS');
+      }
+      depositoId = dto.depositoId ?? cli.depositoId ?? (await this.depositoPorDefecto());
     } else {
       if (!dto.clienteId) {
         throw new BadRequestException('clienteId es requerido para usuarios internos');
@@ -117,6 +120,9 @@ export class AutorizacionService {
       clienteId = dto.clienteId;
       const cli = await this.prisma.cliente.findUnique({ where: { id: clienteId } });
       if (!cli) throw new BadRequestException('Cliente inexistente');
+      if (!cli.activo) {
+        throw new BadRequestException('Cliente inactivo: no se pueden crear devoluciones');
+      }
       depositoId = dto.depositoId ?? cli.depositoId ?? (await this.depositoPorDefecto());
     }
 

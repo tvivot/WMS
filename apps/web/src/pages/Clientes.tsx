@@ -48,6 +48,16 @@ export function Clientes() {
     setCred({ titulo: `Nueva clave de ${c.nroCliente}`, clave: r.claveGenerada });
   };
 
+  const toggleActivo = async (c: Cliente) => {
+    setError(null);
+    try {
+      await api.put(`/clientes/${c.id}`, { activo: !c.activo });
+      cargar();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
@@ -58,6 +68,9 @@ export function Clientes() {
       </div>
 
       {cred && <CredencialAlert titulo={cred.titulo} clave={cred.clave} onCerrar={() => setCred(null)} />}
+      {error && !creando && (
+        <p className="text-sm text-red-600 bg-red-50 px-4 py-2 rounded-lg" role="alert">{error}</p>
+      )}
 
       {creando && (
         <Card>
@@ -94,9 +107,19 @@ export function Clientes() {
                   <td className="px-4 py-3">{c.nombre}</td>
                   <td className="px-4 py-3 text-slate-500">{c.direccion ?? '—'}</td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs font-semibold ${c.activo ? 'text-emerald-700' : 'text-slate-400'}`}>
-                      {c.activo ? 'Activo' : 'Inactivo'}{c.primerIngreso ? ' · 1er ingreso' : ''}
-                    </span>
+                    <button
+                      onClick={() => toggleActivo(c)}
+                      title={c.activo ? 'Clic para desactivar (deja de verse en el WMS)' : 'Clic para reactivar'}
+                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 h-7 text-xs font-semibold cursor-pointer transition-colors ${
+                        c.activo
+                          ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                          : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                      }`}
+                    >
+                      <span className={`h-1.5 w-1.5 rounded-full ${c.activo ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+                      {c.activo ? 'Activo' : 'Inactivo'}
+                      {c.primerIngreso && c.activo ? ' · 1er ingreso' : ''}
+                    </button>
                   </td>
                   <td className="px-4 py-3 text-right">
                     <button className="btn-ghost h-9" onClick={() => reset(c)} title="Resetear clave">
