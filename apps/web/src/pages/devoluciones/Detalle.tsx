@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, CheckCircle2, Truck } from 'lucide-react';
 import { api } from '../../lib/api';
+import { enviarControl } from '../../lib/outbox';
 import { useAuth } from '../../lib/auth';
 import { PERMISOS, ESTADOS_ORDEN, ESTADO_LABEL, type Estado } from '../../lib/estados';
 import { Card, EstadoBadge, Field, Spinner } from '../../components/ui';
@@ -286,13 +287,19 @@ function ControlBulto({ autorizacionId, numero, onDone, onError }: { autorizacio
     } catch (e) { onError((e as Error).message); }
   };
 
+  const [encolado, setEncolado] = useState(false);
   const guardar = async () => {
     try {
-      await api.post(`/devoluciones/autorizaciones/${autorizacionId}/bultos/${numero}/control`, {
+      const r = await enviarControl(autorizacionId, numero, {
         peso: peso ? Number(peso) : undefined,
         controles: filas.map((f) => ({ isbn: f.isbn, cantidad: f.cantidad, malEstado: f.malEstado })),
       });
-      onDone();
+      if (r.encolado) {
+        // Sin conexión: quedó guardado localmente y se sincronizará solo.
+        setEncolado(true);
+      } else {
+        onDone();
+      }
     } catch (e) { onError((e as Error).message); }
   };
 
@@ -312,6 +319,11 @@ function ControlBulto({ autorizacionId, numero, onDone, onError }: { autorizacio
         <Field label="Peso bulto (kg)"><input className="input w-28 tabnum" inputMode="decimal" value={peso} onChange={(e) => setPeso(e.target.value)} /></Field>
         <button className="btn-primary" onClick={guardar}>Marcar controlado</button>
       </div>
+      {encolado && (
+        <p className="text-xs text-amber-700 bg-amber-50 rounded px-3 py-2">
+          Sin conexión: el control quedó <b>guardado en el dispositivo</b> y se sincronizará automáticamente al volver la red.
+        </p>
+      )}
     </div>
   );
 }

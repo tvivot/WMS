@@ -8,11 +8,13 @@ import {
   LogOut,
   Menu,
   PackageCheck,
+  Shield,
   Users,
   X,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { PERMISOS } from '../lib/estados';
+import { OfflineIndicator } from './OfflineIndicator';
 
 interface NavItem {
   to: string;
@@ -27,6 +29,7 @@ const ITEMS: NavItem[] = [
   { to: '/catalogo', label: 'Catálogo', icon: BookOpen, permiso: PERMISOS.CATALOGO_ADMINISTRAR },
   { to: '/clientes', label: 'Clientes', icon: Building2, permiso: PERMISOS.CLIENTE_ADMINISTRAR },
   { to: '/usuarios', label: 'Usuarios', icon: Users, permiso: PERMISOS.USUARIO_ADMINISTRAR },
+  { to: '/roles', label: 'Roles', icon: Shield, permiso: PERMISOS.ROL_ADMINISTRAR },
 ];
 
 export function AppShell() {
@@ -77,6 +80,7 @@ export function AppShell() {
           </nav>
 
           <div className="ml-auto flex items-center gap-3">
+            <OfflineIndicator />
             <div className="text-right leading-tight hidden sm:block">
               <div className="text-sm font-semibold">{actor?.nombre}</div>
               <div className="text-[11px] text-white/50 capitalize">{actor?.tipo}</div>

@@ -5,6 +5,7 @@ import { Login } from './pages/Login';
 import { Catalogo } from './pages/Catalogo';
 import { Clientes } from './pages/Clientes';
 import { Usuarios } from './pages/Usuarios';
+import { Roles } from './pages/Roles';
 import { Informes } from './pages/Informes';
 import { DevolucionesLista } from './pages/devoluciones/Lista';
 import { DevolucionDetalle } from './pages/devoluciones/Detalle';
@@ -41,6 +42,7 @@ export default function App() {
             <Route path="/catalogo" element={<Catalogo />} />
             <Route path="/clientes" element={<Clientes />} />
             <Route path="/usuarios" element={<Usuarios />} />
+            <Route path="/roles" element={<Roles />} />
           </Route>
           <Route path="*" element={<Navigate to="/devoluciones" replace />} />
         </Routes>

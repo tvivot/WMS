@@ -46,21 +46,20 @@ export class SeedService implements OnApplicationBootstrap {
 
   private async seedRoles(): Promise<void> {
     for (const rolDef of ROLES_DEFAULT) {
-      const rol = await this.prisma.rol.upsert({
+      const existente = await this.prisma.rol.findUnique({
         where: { nombre: rolDef.nombre },
-        update: { descripcion: rolDef.descripcion },
-        create: { nombre: rolDef.nombre, descripcion: rolDef.descripcion },
       });
-      // Sincroniza el mapa de permisos del rol (sin duplicar).
+      if (existente) continue; // Ya existe: NO tocar sus permisos (los maneja el ABM).
+
+      const rol = await this.prisma.rol.create({
+        data: { nombre: rolDef.nombre, descripcion: rolDef.descripcion },
+      });
+      // Solo al CREAR el rol se aplican los permisos por defecto.
       for (const codigo of rolDef.permisos) {
-        const permiso = await this.prisma.permiso.findUnique({
-          where: { codigo },
-        });
+        const permiso = await this.prisma.permiso.findUnique({ where: { codigo } });
         if (!permiso) continue;
-        await this.prisma.rolPermiso.upsert({
-          where: { rolId_permisoId: { rolId: rol.id, permisoId: permiso.id } },
-          update: {},
-          create: { rolId: rol.id, permisoId: permiso.id },
+        await this.prisma.rolPermiso.create({
+          data: { rolId: rol.id, permisoId: permiso.id },
         });
       }
     }

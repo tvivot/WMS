@@ -43,5 +43,6 @@ export const PERMISOS = {
   CATALOGO_ADMINISTRAR: 'catalogo.administrar',
   CLIENTE_ADMINISTRAR: 'cliente.administrar',
   USUARIO_ADMINISTRAR: 'usuario.administrar',
+  ROL_ADMINISTRAR: 'rol.administrar',
   INFORMES_VER: 'informes.ver',
 } as const;
