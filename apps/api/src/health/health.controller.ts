@@ -7,6 +7,9 @@ interface HealthResponse {
   status: 'ok' | 'error';
   db: 'up' | 'down';
   ts: string;
+  // DIAGNÓSTICO TEMPORAL: motivo del fallo de conexión. Quitar tras resolver.
+  detail?: string;
+  code?: string;
 }
 
 @Controller('health')
@@ -16,17 +19,19 @@ export class HealthController {
   /** GET /api/health — verifica proceso vivo + conexión a la DB (SELECT 1). */
   @Get()
   async check(): Promise<HealthResponse> {
-    let db: HealthResponse['db'] = 'down';
     try {
       await this.prisma.$queryRaw`SELECT 1`;
-      db = 'up';
-    } catch {
-      db = 'down';
+      return { status: 'ok', db: 'up', ts: new Date().toISOString() };
+    } catch (err) {
+      const e = err as { message?: string; code?: string };
+      return {
+        status: 'error',
+        db: 'down',
+        ts: new Date().toISOString(),
+        // Recortado para no volcar datos sensibles; suele bastar para diagnosticar.
+        detail: (e.message ?? String(err)).split('\n')[0].slice(0, 300),
+        code: e.code,
+      };
     }
-    return {
-      status: db === 'up' ? 'ok' : 'error',
-      db,
-      ts: new Date().toISOString(),
-    };
   }
 }
