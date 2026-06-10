@@ -16,6 +16,7 @@ interface Detalle {
   transportistaId: number | null;
   cliente: { id: number; nroCliente: string; nombre: string } | null;
   transportista: { id: number; nombre: string } | null;
+  creadoPor: { tipo: 'usuario' | 'cliente'; nombre: string } | null;
   bultosDeclarados: number | null; pesoTotalDeclarado: string | null; bultosRecibidos: number | null;
   ubicacionEspera: string | null; ubicacionDestinoBueno: string | null; ubicacionDestinoMalo: string | null;
   observaciones: string | null; declaraciones: Linea[]; bultos: Bulto[];
@@ -66,9 +67,28 @@ export function DevolucionDetalle() {
       {/* Panel de acción según estado + permiso */}
       {d.estado === 'A_APROBAR' && puede(PERMISOS.SOLICITUD_APROBAR) && (
         <Card>
+          <h2 className="font-semibold mb-1">Solicitud pendiente de aprobación</h2>
+          <p className="text-sm text-slate-500 mb-3">
+            Al aprobarla, el cliente va a poder cargar los libros y despachar la devolución.
+          </p>
           <button className="btn-accent" onClick={() => accion(() => api.patch(`/devoluciones/autorizaciones/${d.id}/aprobar`))}>
             <CheckCircle2 className="h-4 w-4" /> Aprobar solicitud
           </button>
+        </Card>
+      )}
+
+      {d.estado === 'A_APROBAR' && !puede(PERMISOS.SOLICITUD_APROBAR) && (
+        <Card className="border-amber-200">
+          <h2 className="font-semibold text-amber-700 mb-1">Esperando aprobación</h2>
+          <p className="text-sm text-slate-600">
+            La solicitud todavía no fue aprobada. La aprueba un usuario con permiso de aprobación
+            (por defecto: Vendedor, Gerencial o Administrador) entrando a esta devolución o con el
+            botón <b>Aprobar</b> de la lista. Cuando esté aprobada vas a poder cargar los libros.
+          </p>
+          <p className="text-xs text-slate-400 mt-2">
+            ¿Tendrías que poder aprobar y no ves el botón? Cerrá sesión y volvé a entrar: los
+            permisos se actualizan al iniciar sesión.
+          </p>
         </Card>
       )}
 
@@ -474,6 +494,17 @@ function ResumenDatos({ d }: { d: Detalle }) {
       <dl className="grid grid-cols-2 gap-y-2 gap-x-4 text-slate-600">
         <dt className="text-slate-400">Cliente</dt>
         <dd>{d.cliente ? `${d.cliente.nroCliente} · ${d.cliente.nombre}` : d.clienteId}</dd>
+        <dt className="text-slate-400">Solicitada por</dt>
+        <dd>
+          {d.creadoPor ? (
+            <>
+              {d.creadoPor.nombre}{' '}
+              <span className="text-xs text-slate-400">
+                ({d.creadoPor.tipo === 'cliente' ? 'cliente' : 'usuario interno'})
+              </span>
+            </>
+          ) : '—'}
+        </dd>
         <dt className="text-slate-400">Transportista</dt>
         <dd>{d.transportista?.nombre ?? '—'}</dd>
         <dt className="text-slate-400">Bultos declarados</dt><dd className="tabnum">{d.bultosDeclarados ?? '—'}</dd>

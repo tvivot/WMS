@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, ParseIntPipe, Post, Put, Query } from '@n
 import { RequierePermiso } from '../auth/decoradores';
 import { PERMISOS } from '../auth/permisos';
 import { UsuariosService } from './usuarios.service';
-import { CrearUsuarioDto, EditarUsuarioDto } from './dto';
+import { CrearUsuarioDto, EditarUsuarioDto, ResetClaveDto } from './dto';
 
 @RequierePermiso(PERMISOS.USUARIO_ADMINISTRAR)
 @Controller('usuarios')
@@ -31,7 +31,7 @@ export class UsuariosController {
   }
 
   @Post(':id/reset-clave')
-  reset(@Param('id', ParseIntPipe) id: number) {
-    return this.svc.resetClave(id);
+  reset(@Param('id', ParseIntPipe) id: number, @Body() dto: ResetClaveDto) {
+    return this.svc.resetClave(id, dto.clave);
   }
 }

@@ -49,11 +49,15 @@ export class ClientesService {
     });
   }
 
-  /** Crea el cliente y devuelve la clave generada UNA sola vez (para entregarla). */
+  /**
+   * Crea el cliente y devuelve la clave UNA sola vez (para entregarla).
+   * Si el admin eligió una clave (dto.clave) se usa esa y queda definitiva
+   * (sin forzar cambio en el primer ingreso); si no, se genera una aleatoria.
+   */
   async crear(dto: CrearClienteDto) {
     const existe = await this.prisma.cliente.findUnique({ where: { nroCliente: dto.nroCliente } });
     if (existe) throw new BadRequestException('Ya existe un cliente con ese número');
-    const clave = generarClave();
+    const clave = dto.clave?.trim() || generarClave();
     const cliente = await this.prisma.cliente.create({
       data: {
         nroCliente: dto.nroCliente,
@@ -62,7 +66,7 @@ export class ClientesService {
         claveHash: await this.password.hash(clave),
         paisId: dto.paisId ?? null,
         depositoId: dto.depositoId ?? null,
-        primerIngreso: true,
+        primerIngreso: !dto.clave?.trim(),
       },
       select: PUBLICO,
     });
@@ -126,13 +130,18 @@ export class ClientesService {
     return c;
   }
 
-  /** Resetea la clave y devuelve la nueva (para reentregar). */
-  async resetClave(id: number) {
+  /**
+   * Resetea la clave y devuelve la nueva (para reentregar).
+   * Con claveManual queda esa como definitiva; sin ella se genera una aleatoria
+   * y se fuerza el cambio en el primer ingreso.
+   */
+  async resetClave(id: number, claveManual?: string) {
     await this.obtener(id);
-    const clave = generarClave();
+    const manual = claveManual?.trim();
+    const clave = manual || generarClave();
     await this.prisma.cliente.update({
       where: { id },
-      data: { claveHash: await this.password.hash(clave), primerIngreso: true, intentosFallidos: 0, bloqueadoHasta: null },
+      data: { claveHash: await this.password.hash(clave), primerIngreso: !manual, intentosFallidos: 0, bloqueadoHasta: null },
     });
     return { id, claveGenerada: clave };
   }

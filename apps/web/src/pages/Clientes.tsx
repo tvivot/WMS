@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { KeyRound, Plus } from 'lucide-react';
 import { api } from '../lib/api';
-import { Card, CredencialAlert, EmptyState, Field, Spinner } from '../components/ui';
+import { Card, ClaveDialog, CredencialAlert, EmptyState, Field, Spinner } from '../components/ui';
 
 interface Cliente {
   id: number;
@@ -15,8 +15,9 @@ interface Cliente {
 export function Clientes() {
   const [items, setItems] = useState<Cliente[] | null>(null);
   const [creando, setCreando] = useState(false);
-  const [form, setForm] = useState({ nroCliente: '', nombre: '', direccion: '' });
+  const [form, setForm] = useState({ nroCliente: '', nombre: '', direccion: '', clave: '' });
   const [cred, setCred] = useState<{ titulo: string; clave: string } | null>(null);
+  const [reseteando, setReseteando] = useState<Cliente | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const cargar = () => {
@@ -33,9 +34,10 @@ export function Clientes() {
         nroCliente: form.nroCliente,
         nombre: form.nombre,
         direccion: form.direccion || undefined,
+        clave: form.clave.trim() || undefined,
       });
-      setCred({ titulo: `Cliente ${r.nroCliente} — clave generada`, clave: r.claveGenerada });
-      setForm({ nroCliente: '', nombre: '', direccion: '' });
+      setCred({ titulo: `Cliente ${r.nroCliente} — clave de acceso`, clave: r.claveGenerada });
+      setForm({ nroCliente: '', nombre: '', direccion: '', clave: '' });
       setCreando(false);
       cargar();
     } catch (err) {
@@ -43,9 +45,11 @@ export function Clientes() {
     }
   };
 
-  const reset = async (c: Cliente) => {
-    const r = await api.post<{ claveGenerada: string }>(`/clientes/${c.id}/reset-clave`);
+  const reset = async (c: Cliente, clave?: string) => {
+    const r = await api.post<{ claveGenerada: string }>(`/clientes/${c.id}/reset-clave`, clave ? { clave } : {});
     setCred({ titulo: `Nueva clave de ${c.nroCliente}`, clave: r.claveGenerada });
+    setReseteando(null);
+    cargar();
   };
 
   const toggleActivo = async (c: Cliente) => {
@@ -83,6 +87,9 @@ export function Clientes() {
             </Field>
             <Field label="Dirección">
               <input className="input w-72" value={form.direccion} onChange={(e) => setForm({ ...form, direccion: e.target.value })} />
+            </Field>
+            <Field label="Clave (opcional)" hint="Vacío = se genera automática. Si la escribís, queda definitiva (mín. 8).">
+              <input className="input w-64" value={form.clave} minLength={8} onChange={(e) => setForm({ ...form, clave: e.target.value })} placeholder="Generar automática" />
             </Field>
             <button className="btn-accent" type="submit">Crear</button>
             {error && <p className="text-sm text-red-600 w-full">{error}</p>}
@@ -122,7 +129,7 @@ export function Clientes() {
                     </button>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <button className="btn-ghost h-9" onClick={() => reset(c)} title="Resetear clave">
+                    <button className="btn-ghost h-9" onClick={() => setReseteando(c)} title="Asignar nueva clave">
                       <KeyRound className="h-4 w-4" /> Clave
                     </button>
                   </td>
@@ -131,6 +138,14 @@ export function Clientes() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {reseteando && (
+        <ClaveDialog
+          titulo={`Nueva clave para ${reseteando.nroCliente} · ${reseteando.nombre}`}
+          onCerrar={() => setReseteando(null)}
+          onConfirmar={(clave) => reset(reseteando, clave)}
+        />
       )}
     </div>
   );

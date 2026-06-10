@@ -165,6 +165,12 @@ function crearFakePrisma() {
     deposito: {
       findFirst: async () => (db.depositos[0] ? { ...db.depositos[0] } : null),
     },
+    usuario: {
+      findUnique: async ({ where }: any) => {
+        const u = [vendedor, deposito, admin].find((x) => x.sub === where.id);
+        return u ? { nombre: u.nombre, username: u.nombre.toLowerCase() } : null;
+      },
+    },
     transportista: {
       findUnique: async ({ where }: any) => {
         const t = db.transportistas.find((x) => x.id === where.id);

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { CheckCircle2, Plus } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
@@ -109,6 +109,40 @@ export function DevolucionesLista() {
     [items, filtro],
   );
 
+  // Aprobación directa desde la lista (solo para quien tiene el permiso).
+  const puedeAprobar = puede(PERMISOS.SOLICITUD_APROBAR);
+  const columnas = useMemo<ColumnDef<Autorizacion, unknown>[]>(() => {
+    if (!puedeAprobar) return COLUMNAS;
+    const aprobar = async (id: number) => {
+      setError(null);
+      try {
+        await api.patch(`/devoluciones/autorizaciones/${id}/aprobar`);
+        cargar();
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    };
+    return [
+      ...COLUMNAS,
+      {
+        id: 'accion',
+        header: 'Acción',
+        enableSorting: false,
+        cell: ({ row }) =>
+          row.original.estado === 'A_APROBAR' ? (
+            <button
+              className="btn-accent h-8 px-3 text-xs"
+              onClick={() => aprobar(row.original.id)}
+              title="Aprobar esta solicitud"
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" /> Aprobar
+            </button>
+          ) : null,
+      },
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [puedeAprobar]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -137,6 +171,10 @@ export function DevolucionesLista() {
         ))}
       </div>
 
+      {error && !creando && (
+        <p className="text-sm text-red-600 bg-red-50 px-4 py-2 rounded-lg" role="alert">{error}</p>
+      )}
+
       {creando && (
         <Card>
           <form onSubmit={crear} className="flex flex-wrap items-end gap-3">
@@ -164,7 +202,7 @@ export function DevolucionesLista() {
           sub={filtro ? 'Tocá el indicador de nuevo para quitar el filtro.' : 'Creá una nueva solicitud para empezar.'}
         />
       ) : (
-        <DataGrid data={visibles} columns={COLUMNAS} storageKey="devoluciones" />
+        <DataGrid data={visibles} columns={columnas} storageKey="devoluciones" />
       )}
     </div>
   );

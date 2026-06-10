@@ -244,6 +244,12 @@ paths:
           in: path
           schema:
             type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetClaveDto"
       responses:
         "201":
           description: ""
@@ -317,6 +323,12 @@ paths:
           in: path
           schema:
             type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetClaveDto"
       responses:
         "201":
           description: ""
@@ -427,6 +439,26 @@ paths:
         "200":
           description: ""
       tags: *a6
+  /api/admin/migraciones:
+    get:
+      operationId: AdminController_estado
+      parameters: []
+      responses:
+        "200":
+          description: ""
+      tags: &a7
+        - Admin
+    post:
+      operationId: AdminController_aplicar
+      parameters: []
+      responses:
+        "201":
+          description: ""
+          content:
+            application/json:
+              schema:
+                type: object
+      tags: *a7
   /api/devoluciones/autorizaciones:
     post:
       operationId: AutorizacionController_crear
@@ -440,7 +472,7 @@ paths:
       responses:
         "201":
           description: ""
-      tags: &a7
+      tags: &a8
         - Autorizacion
     get:
       operationId: AutorizacionController_listar
@@ -458,7 +490,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a7
+      tags: *a8
   /api/devoluciones/autorizaciones/{id}:
     get:
       operationId: AutorizacionController_detalle
@@ -471,7 +503,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a7
+      tags: *a8
   /api/devoluciones/autorizaciones/{id}/reconciliacion:
     get:
       operationId: AutorizacionController_reconciliacion
@@ -490,7 +522,7 @@ paths:
                 type: array
                 items:
                   type: object
-      tags: *a7
+      tags: *a8
   /api/devoluciones/autorizaciones/{id}/aprobar:
     patch:
       operationId: AutorizacionController_aprobar
@@ -503,7 +535,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a7
+      tags: *a8
   /api/devoluciones/autorizaciones/{id}/declaracion:
     patch:
       operationId: AutorizacionController_declarar
@@ -522,7 +554,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a7
+      tags: *a8
   /api/devoluciones/autorizaciones/{id}/despachar:
     patch:
       operationId: AutorizacionController_despachar
@@ -535,7 +567,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a7
+      tags: *a8
   /api/devoluciones/autorizaciones/{id}/recibir:
     patch:
       operationId: AutorizacionController_recibir
@@ -554,7 +586,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a7
+      tags: *a8
   /api/devoluciones/autorizaciones/{id}/ingreso:
     patch:
       operationId: AutorizacionController_ingreso
@@ -573,7 +605,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a7
+      tags: *a8
   /api/devoluciones/autorizaciones/{id}/bultos/{numero}/control:
     post:
       operationId: AutorizacionController_controlar
@@ -597,7 +629,7 @@ paths:
       responses:
         "201":
           description: ""
-      tags: *a7
+      tags: *a8
   /api/devoluciones/autorizaciones/{id}/cierre:
     patch:
       operationId: AutorizacionController_cerrar
@@ -616,7 +648,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a7
+      tags: *a8
   /api/devoluciones/autorizaciones/{id}/bultos/{numero}/correccion:
     patch:
       operationId: AutorizacionController_corregir
@@ -640,7 +672,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a7
+      tags: *a8
   /api/devoluciones/informes/resumen:
     get:
       operationId: InformesController_resumen
@@ -648,7 +680,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: &a8
+      tags: &a9
         - Informes
   /api/devoluciones/informes/por-cliente:
     get:
@@ -657,7 +689,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a8
+      tags: *a9
   /api/devoluciones/informes/serie:
     get:
       operationId: InformesController_serie
@@ -665,7 +697,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a8
+      tags: *a9
   /api/health:
     get:
       operationId: HealthController_check
@@ -715,6 +747,9 @@ components:
       type: object
       properties: {}
     EditarClienteDto:
+      type: object
+      properties: {}
+    ResetClaveDto:
       type: object
       properties: {}
     CrearUsuarioDto:

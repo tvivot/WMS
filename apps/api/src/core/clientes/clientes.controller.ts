@@ -13,7 +13,7 @@ import { Actor, RequierePermiso } from '../auth/decoradores';
 import { PERMISOS } from '../auth/permisos';
 import type { JwtPayload } from '../auth/jwt-payload';
 import { ClientesService } from './clientes.service';
-import { ClientesImportarDto, CrearClienteDto, EditarClienteDto } from './dto';
+import { ClientesImportarDto, CrearClienteDto, EditarClienteDto, ResetClaveDto } from './dto';
 
 @Controller('clientes')
 export class ClientesController {
@@ -63,7 +63,7 @@ export class ClientesController {
 
   @RequierePermiso(PERMISOS.CLIENTE_ADMINISTRAR)
   @Post(':id/reset-clave')
-  reset(@Param('id', ParseIntPipe) id: number) {
-    return this.svc.resetClave(id);
+  reset(@Param('id', ParseIntPipe) id: number, @Body() dto: ResetClaveDto) {
+    return this.svc.resetClave(id, dto.clave);
   }
 }

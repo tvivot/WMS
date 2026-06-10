@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ESTADO_CLASE, ESTADO_LABEL, type Estado } from '../lib/estados';
 
 export function Spinner({ className = '' }: { className?: string }) {
@@ -72,6 +72,74 @@ export function CredencialAlert({
         <button className="btn-ghost h-9" onClick={onCerrar}>
           Cerrar
         </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Diálogo para asignar una nueva clave: el admin puede escribirla él mismo
+ * (queda definitiva) o generarla automática (se exige cambiarla al ingresar).
+ */
+export function ClaveDialog({
+  titulo,
+  onCerrar,
+  onConfirmar,
+}: {
+  titulo: string;
+  onCerrar: () => void;
+  onConfirmar: (clave?: string) => Promise<void>;
+}) {
+  const [clave, setClave] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [enviando, setEnviando] = useState(false);
+
+  const confirmar = async (manual: boolean) => {
+    if (manual && clave.trim().length < 8) {
+      setError('La clave debe tener al menos 8 caracteres.');
+      return;
+    }
+    setError(null);
+    setEnviando(true);
+    try {
+      await onConfirmar(manual ? clave.trim() : undefined);
+    } catch (e) {
+      setError((e as Error).message);
+      setEnviando(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onCerrar}>
+      <div className="card p-5 w-full max-w-md animate-fade-in" onClick={(e) => e.stopPropagation()}>
+        <h2 className="font-semibold mb-1">{titulo}</h2>
+        <p className="text-xs text-slate-500 mb-3">
+          Escribí la clave que quieras asignar (queda como definitiva), o generá una automática
+          (se pedirá cambiarla en el primer ingreso).
+        </p>
+        <Field label="Clave elegida (mín. 8 caracteres)">
+          <input
+            className="input w-full"
+            value={clave}
+            onChange={(e) => setClave(e.target.value)}
+            placeholder="Dejar vacío para generar automática"
+            autoFocus
+          />
+        </Field>
+        {error && <p className="text-sm text-red-600 mt-2" role="alert">{error}</p>}
+        <div className="flex flex-wrap justify-end gap-2 mt-4">
+          <button className="btn-ghost h-9" onClick={onCerrar} disabled={enviando}>Cancelar</button>
+          <button className="btn-outline h-9" onClick={() => confirmar(false)} disabled={enviando}>
+            Generar automática
+          </button>
+          <button
+            className="btn-accent h-9 disabled:opacity-50"
+            onClick={() => confirmar(true)}
+            disabled={enviando || clave.trim().length === 0}
+          >
+            Usar esta clave
+          </button>
+        </div>
       </div>
     </div>
   );

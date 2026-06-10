@@ -625,7 +625,7 @@ export class AutorizacionService {
         b.controles.map((c) => c.productoId).filter((x): x is number => x !== null),
       ),
     ]);
-    const [cliente, transportista] = await Promise.all([
+    const [cliente, transportista, creadoPor] = await Promise.all([
       this.prisma.cliente.findUnique({
         where: { id: a.clienteId },
         select: { id: true, nroCliente: true, nombre: true },
@@ -636,6 +636,21 @@ export class AutorizacionService {
             select: { id: true, nombre: true },
           })
         : Promise.resolve(null),
+      a.creadoPorTipo === 'cliente'
+        ? this.prisma.cliente
+            .findUnique({
+              where: { id: a.creadoPorId },
+              select: { nroCliente: true, nombre: true },
+            })
+            .then((c) =>
+              c ? { tipo: 'cliente' as const, nombre: `${c.nroCliente} · ${c.nombre}` } : null,
+            )
+        : this.prisma.usuario
+            .findUnique({
+              where: { id: a.creadoPorId },
+              select: { nombre: true, username: true },
+            })
+            .then((u) => (u ? { tipo: 'usuario' as const, nombre: u.nombre } : null)),
     ]);
 
     const conTitulo = <T extends { productoId: number | null }>(x: T) => ({
@@ -646,6 +661,7 @@ export class AutorizacionService {
       ...a,
       cliente,
       transportista,
+      creadoPor,
       declaraciones: a.declaraciones.map(conTitulo),
       bultos: a.bultos.map((b) => ({ ...b, controles: b.controles.map(conTitulo) })),
     };

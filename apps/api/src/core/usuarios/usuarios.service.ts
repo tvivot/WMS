@@ -35,17 +35,22 @@ export class UsuariosService {
     return us.map((u) => this.mapear(u));
   }
 
+  /**
+   * Crea el usuario. Si el admin eligió una clave (dto.clave) se usa esa y
+   * queda definitiva (sin forzar cambio al ingresar); si no, se genera una
+   * aleatoria y se exige cambiarla en el primer ingreso.
+   */
   async crear(dto: CrearUsuarioDto) {
     const existe = await this.prisma.usuario.findUnique({ where: { username: dto.username } });
     if (existe) throw new BadRequestException('Ya existe ese usuario');
-    const clave = generarClave();
+    const clave = dto.clave?.trim() || generarClave();
     const u = await this.prisma.usuario.create({
       data: {
         username: dto.username,
         nombre: dto.nombre,
         email: dto.email ?? null,
         claveHash: await this.password.hash(clave),
-        primerIngreso: true,
+        primerIngreso: !dto.clave?.trim(),
         roles: dto.rolIds?.length
           ? { create: dto.rolIds.map((rolId) => ({ rolId })) }
           : undefined,
@@ -86,12 +91,14 @@ export class UsuariosService {
     return this.mapear(u);
   }
 
-  async resetClave(id: number) {
+  /** Resetea la clave: manual = definitiva; generada = cambio obligatorio al ingresar. */
+  async resetClave(id: number, claveManual?: string) {
     await this.obtener(id);
-    const clave = generarClave();
+    const manual = claveManual?.trim();
+    const clave = manual || generarClave();
     await this.prisma.usuario.update({
       where: { id },
-      data: { claveHash: await this.password.hash(clave), primerIngreso: true, intentosFallidos: 0, bloqueadoHasta: null },
+      data: { claveHash: await this.password.hash(clave), primerIngreso: !manual, intentosFallidos: 0, bloqueadoHasta: null },
     });
     return { id, claveGenerada: clave };
   }

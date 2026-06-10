@@ -16,6 +16,7 @@ import {
 import { useAuth } from '../lib/auth';
 import { PERMISOS } from '../lib/estados';
 import { OfflineIndicator } from './OfflineIndicator';
+import { AyudaBoton } from './AyudaPanel';
 
 interface NavItem {
   to: string;
@@ -83,6 +84,7 @@ export function AppShell() {
 
           <div className="ml-auto flex items-center gap-3">
             <OfflineIndicator />
+            <AyudaBoton />
             <div className="text-right leading-tight hidden sm:block">
               <div className="text-sm font-semibold">{actor?.nombre}</div>
               <div className="text-[11px] text-white/50 capitalize">{actor?.tipo}</div>
