@@ -2,6 +2,9 @@
 
 generator client {
   provider = "prisma-client-js"
+  // Motor "binary" (proceso aparte) en vez del "library" (Node-API): evita el
+  // panic "timer has gone away" del engine nativo en el shared hosting de Hostinger.
+  engineType = "binary"
 }
 
 datasource db {
