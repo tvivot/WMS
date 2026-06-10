@@ -218,11 +218,13 @@ No se saltean estados. Cada transición valida **permiso** del usuario. Todo cam
 
 ## Políticas permanentes (no negociables)
 
-### 1. Skills y agentes primero
-Al iniciar una tarea de código, primero listá las skills y agentes instalados. Identificá cuál corresponde y usalo. Está PROHIBIDO improvisar código desde cero ignorando una skill o agente que ya resuelve esa tarea. Si dudás si hay una skill aplicable, verificá antes de arrancar a mano. (Para UI: skill `frontend-design`.)
+### 1. Skills y agentes primero — evaluar SIEMPRE la mejor skill
+Al iniciar una tarea de código, primero listá las skills y agentes instalados y **analizá explícitamente cuál es la mejor para esa tarea** antes de arrancar. Está PROHIBIDO improvisar código desde cero ignorando una skill o agente que ya resuelve esa tarea. Si dudás si hay una skill aplicable, verificá antes de arrancar a mano. (Para UI: skill `ui-ux-pro-max` / `frontend-design`.)
+- **Para tareas sustantivas o cuando la elección no es obvia: usar el ORQUESTADOR** (workflows/agentes en paralelo) para evaluar qué skill/enfoque conviene y para investigar, en vez de iterar a ciegas. Regla práctica: si una iteración de prueba/error falla 2 veces, parar y orquestar una investigación (así se resolvió el problema del host MySQL en Hostinger).
 
-### 2. claude-mem — leer antes de actuar
-claude-mem captura solo e inyecta el contexto al abrir sesión. Al iniciar CADA sesión, leé el bloque de observaciones recientes (avances, errores, fixes, decisiones) ANTES de tocar nada, y respetalo. Referenciá observaciones por ID. Declará decisiones y fixes con claridad. Antes de re-analizar un archivo o problema, fijate si ya hay una observación.
+### 2. claude-mem y memorias — leer antes de actuar y MANTENER ACTUALIZADAS
+claude-mem captura solo e inyecta el contexto al abrir sesión. Al iniciar CADA sesión, leé el bloque de observaciones recientes (avances, errores, fixes, decisiones) y `docs/estado-proyecto.md` ANTES de tocar nada, y respetalos. Referenciá observaciones por ID. Declará decisiones y fixes con claridad. Antes de re-analizar un archivo o problema, fijate si ya hay una observación.
+- **Al cerrar cada hito o resolver un problema no trivial, actualizá las memorias**: `docs/estado-proyecto.md` (estado operativo: qué se construyó, deploy, footguns) y las memorias persistentes del proyecto. Lo que no se registra se vuelve a romper en la próxima sesión.
 
 ### 3. Frontend — dinámico, profesional, responsive e instalable
 - Dinámico y animado, nunca plano: micro-interacciones, feedback al click/escaneo, estética pulida.
