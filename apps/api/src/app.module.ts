@@ -14,6 +14,8 @@ import { CatalogoModule } from './core/catalogo/catalogo.module';
 import { ClientesModule } from './core/clientes/clientes.module';
 import { UsuariosModule } from './core/usuarios/usuarios.module';
 import { RolesModule } from './core/roles/roles.module';
+import { TransportistasModule } from './core/transportistas/transportistas.module';
+import { AdminModule } from './core/admin/admin.module';
 import { DevolucionesModule } from './modulos/devoluciones/devoluciones.module';
 
 @Module({
@@ -30,6 +32,8 @@ import { DevolucionesModule } from './modulos/devoluciones/devoluciones.module';
     ClientesModule,
     UsuariosModule,
     RolesModule,
+    TransportistasModule,
+    AdminModule,
     DevolucionesModule,
     HealthModule,
     // Sirve la PWA compilada. En runtime, __dirname = dist/, así que el path

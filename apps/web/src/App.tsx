@@ -4,6 +4,7 @@ import { AppShell } from './components/AppShell';
 import { Login } from './pages/Login';
 import { Catalogo } from './pages/Catalogo';
 import { Clientes } from './pages/Clientes';
+import { Transportistas } from './pages/Transportistas';
 import { Usuarios } from './pages/Usuarios';
 import { Roles } from './pages/Roles';
 import { Informes } from './pages/Informes';
@@ -41,6 +42,7 @@ export default function App() {
             <Route path="/informes" element={<Informes />} />
             <Route path="/catalogo" element={<Catalogo />} />
             <Route path="/clientes" element={<Clientes />} />
+            <Route path="/transportistas" element={<Transportistas />} />
             <Route path="/usuarios" element={<Usuarios />} />
             <Route path="/roles" element={<Roles />} />
           </Route>

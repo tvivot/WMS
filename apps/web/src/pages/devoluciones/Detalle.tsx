@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, CheckCircle2, Truck } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, PencilLine, Truck } from 'lucide-react';
 import { api } from '../../lib/api';
 import { enviarControl } from '../../lib/outbox';
 import { useAuth } from '../../lib/auth';
@@ -8,15 +8,22 @@ import { PERMISOS, ESTADOS_ORDEN, ESTADO_LABEL, type Estado } from '../../lib/es
 import { Card, EstadoBadge, Field, Spinner } from '../../components/ui';
 import { Scanner } from '../../components/Scanner';
 
-interface Linea { id: number; isbn: string; cantidad: number; productoId: number | null }
-interface Control { id: number; isbn: string; cantidad: number; malEstado: number }
+interface Linea { id: number; isbn: string; cantidad: number; productoId: number | null; titulo: string | null }
+interface Control { id: number; isbn: string; cantidad: number; malEstado: number; titulo: string | null }
 interface Bulto { id: number; numero: number; peso: string | null; estadoControl: string; controles: Control[] }
 interface Detalle {
   id: number; estado: Estado; clienteId: number; depositoId: number;
+  transportistaId: number | null;
+  cliente: { id: number; nroCliente: string; nombre: string } | null;
+  transportista: { id: number; nombre: string } | null;
   bultosDeclarados: number | null; pesoTotalDeclarado: string | null; bultosRecibidos: number | null;
   ubicacionEspera: string | null; ubicacionDestinoBueno: string | null; ubicacionDestinoMalo: string | null;
   observaciones: string | null; declaraciones: Linea[]; bultos: Bulto[];
 }
+interface TransportistaOpcion { id: number; nombre: string }
+
+interface FilaControl { isbn: string; titulo: string; cantidad: number; malEstado: number }
+type ResultadoGuardar = { encolado?: true } | void;
 
 export function DevolucionDetalle() {
   const { id } = useParams();
@@ -83,6 +90,10 @@ export function DevolucionDetalle() {
 
       {d.estado === 'PROCESADO' && <PanelReconciliacion id={d.id} d={d} />}
 
+      {d.estado === 'PROCESADO' && puede(PERMISOS.DEVOLUCION_CORREGIR) && (
+        <PanelCorreccion d={d} onDone={cargar} onError={setError} />
+      )}
+
       <ResumenDatos d={d} />
     </div>
   );
@@ -107,10 +118,18 @@ function Stepper({ estado }: { estado: Estado }) {
 
 function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => void; onError: (s: string) => void }) {
   const [lineas, setLineas] = useState<{ isbn: string; titulo: string; cantidad: number }[]>(
-    d.declaraciones.map((l) => ({ isbn: l.isbn, titulo: l.isbn, cantidad: l.cantidad })),
+    d.declaraciones.map((l) => ({ isbn: l.isbn, titulo: l.titulo ?? l.isbn, cantidad: l.cantidad })),
   );
   const [bultos, setBultos] = useState(String(d.bultosDeclarados ?? ''));
   const [peso, setPeso] = useState(String(d.pesoTotalDeclarado ?? ''));
+  const [transportistas, setTransportistas] = useState<TransportistaOpcion[]>([]);
+  const [transportistaId, setTransportistaId] = useState<string>(
+    d.transportistaId ? String(d.transportistaId) : '',
+  );
+
+  useEffect(() => {
+    api.get<TransportistaOpcion[]>('/transportistas').then(setTransportistas).catch(() => setTransportistas([]));
+  }, []);
 
   const agregar = async (codigo: string) => {
     try {
@@ -129,21 +148,32 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
     }
   };
 
+  // Lanza si falla: quien la llame decide (el botón muestra el error;
+  // "despachar" NO debe seguir si el guardado falló).
+  const guardarOLanzar = async () => {
+    await api.patch(`/devoluciones/autorizaciones/${d.id}/declaracion`, {
+      lineas: lineas.map((l) => ({ isbn: l.isbn, cantidad: l.cantidad })),
+      bultosDeclarados: Number(bultos),
+      pesoTotalDeclarado: Number(peso),
+      transportistaId: transportistaId ? Number(transportistaId) : undefined,
+    });
+  };
+
   const guardar = async () => {
     try {
-      await api.patch(`/devoluciones/autorizaciones/${d.id}/declaracion`, {
-        lineas: lineas.map((l) => ({ isbn: l.isbn, cantidad: l.cantidad })),
-        bultosDeclarados: Number(bultos),
-        pesoTotalDeclarado: Number(peso),
-      });
+      await guardarOLanzar();
       onDone();
     } catch (e) {
       onError((e as Error).message);
     }
   };
   const despachar = async () => {
+    if (!transportistaId) {
+      onError('Elegí el transportista antes de despachar.');
+      return;
+    }
     try {
-      await guardar();
+      await guardarOLanzar();
       await api.patch(`/devoluciones/autorizaciones/${d.id}/despachar`);
       onDone();
     } catch (e) {
@@ -172,6 +202,16 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
       <div className="grid grid-cols-2 gap-3 mt-4">
         <Field label="Bultos"><input className="input tabnum" inputMode="numeric" value={bultos} onChange={(e) => setBultos(e.target.value)} /></Field>
         <Field label="Peso total (kg)"><input className="input tabnum" inputMode="decimal" value={peso} onChange={(e) => setPeso(e.target.value)} /></Field>
+      </div>
+      <div className="mt-3">
+        <Field label="Transportista" hint={transportistas.length === 0 ? 'No hay transportistas cargados: pedile al depósito que cargue uno.' : undefined}>
+          <select className="input" value={transportistaId} onChange={(e) => setTransportistaId(e.target.value)}>
+            <option value="">Elegir transportista…</option>
+            {transportistas.map((t) => (
+              <option key={t.id} value={t.id}>{t.nombre}</option>
+            ))}
+          </select>
+        </Field>
       </div>
       <div className="flex gap-3 mt-4">
         <button className="btn-outline" onClick={guardar}>Guardar</button>
@@ -250,7 +290,14 @@ function PanelControl({ d, onDone, onError }: { d: Detalle; onDone: () => void; 
               </span>
             </button>
             {activo === b.numero && (
-              <ControlBulto autorizacionId={d.id} numero={b.numero} onDone={() => { setActivo(null); onDone(); }} onError={onError} />
+              <ControlBulto
+                inicial={b.controles.map((c) => ({ isbn: c.isbn, titulo: c.titulo ?? c.isbn, cantidad: c.cantidad, malEstado: c.malEstado }))}
+                pesoInicial={b.peso ?? ''}
+                etiqueta="Marcar controlado"
+                onGuardar={(payload) => enviarControl(d.id, b.numero, payload)}
+                onDone={() => { setActivo(null); onDone(); }}
+                onError={onError}
+              />
             )}
           </div>
         ))}
@@ -272,9 +319,22 @@ function PanelControl({ d, onDone, onError }: { d: Detalle; onDone: () => void; 
   );
 }
 
-function ControlBulto({ autorizacionId, numero, onDone, onError }: { autorizacionId: number; numero: number; onDone: () => void; onError: (s: string) => void }) {
-  const [filas, setFilas] = useState<{ isbn: string; titulo: string; cantidad: number; malEstado: number }[]>([]);
-  const [peso, setPeso] = useState('');
+/**
+ * Editor del contenido de un bulto (escaneo + cantidades + mal estado).
+ * Reusado por el control normal (outbox offline) y por la corrección
+ * post-Procesado (directo a la API): cambia solo `onGuardar`.
+ */
+function ControlBulto({ inicial, pesoInicial, etiqueta, onGuardar, onDone, onError }: {
+  inicial?: FilaControl[];
+  pesoInicial?: string;
+  etiqueta: string;
+  onGuardar: (payload: { peso?: number; controles: { isbn: string; cantidad: number; malEstado: number }[] }) => Promise<ResultadoGuardar>;
+  onDone: () => void;
+  onError: (s: string) => void;
+}) {
+  const [filas, setFilas] = useState<FilaControl[]>(inicial ?? []);
+  const [peso, setPeso] = useState(pesoInicial ?? '');
+  const [encolado, setEncolado] = useState(false);
 
   const agregar = async (codigo: string) => {
     try {
@@ -287,14 +347,13 @@ function ControlBulto({ autorizacionId, numero, onDone, onError }: { autorizacio
     } catch (e) { onError((e as Error).message); }
   };
 
-  const [encolado, setEncolado] = useState(false);
   const guardar = async () => {
     try {
-      const r = await enviarControl(autorizacionId, numero, {
+      const r = await onGuardar({
         peso: peso ? Number(peso) : undefined,
         controles: filas.map((f) => ({ isbn: f.isbn, cantidad: f.cantidad, malEstado: f.malEstado })),
       });
-      if (r.encolado) {
+      if (r && r.encolado) {
         // Sin conexión: quedó guardado localmente y se sincronizará solo.
         setEncolado(true);
       } else {
@@ -315,9 +374,10 @@ function ControlBulto({ autorizacionId, numero, onDone, onError }: { autorizacio
           <input type="number" min={0} value={f.malEstado} onChange={(e) => setFilas((p) => p.map((x, j) => j === i ? { ...x, malEstado: Number(e.target.value) } : x))} className="input w-16 h-9 tabnum text-center" />
         </div>
       ))}
+      {filas.length === 0 && <p className="text-xs text-slate-400">Escaneá al menos un ISBN (un bulto vacío se carga con cantidad 0).</p>}
       <div className="flex items-end gap-3">
         <Field label="Peso bulto (kg)"><input className="input w-28 tabnum" inputMode="decimal" value={peso} onChange={(e) => setPeso(e.target.value)} /></Field>
-        <button className="btn-primary" onClick={guardar}>Marcar controlado</button>
+        <button className="btn-primary" onClick={guardar}>{etiqueta}</button>
       </div>
       {encolado && (
         <p className="text-xs text-amber-700 bg-amber-50 rounded px-3 py-2">
@@ -328,29 +388,81 @@ function ControlBulto({ autorizacionId, numero, onDone, onError }: { autorizacio
   );
 }
 
+/** Corrección post-Procesado: solo con permiso devolucion.corregir (Admin). Queda en auditoría. */
+function PanelCorreccion({ d, onDone, onError }: { d: Detalle; onDone: () => void; onError: (s: string) => void }) {
+  const [activo, setActivo] = useState<number | null>(null);
+  const [obs, setObs] = useState('');
+
+  return (
+    <Card className="border-amber-200">
+      <h2 className="font-semibold mb-1 flex items-center gap-2 text-amber-700">
+        <PencilLine className="h-4 w-4" /> Corrección (Administrador)
+      </h2>
+      <p className="text-xs text-slate-500 mb-3">
+        La devolución no se reabre: la corrección reemplaza el control del bulto, queda en auditoría
+        y re-emite el resultado por ISBN.
+      </p>
+      <Field label="Motivo de la corrección">
+        <input className="input" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ej: error de tipeo en cantidad" />
+      </Field>
+      <div className="space-y-2 mt-3">
+        {d.bultos.map((b) => (
+          <div key={b.id}>
+            <button
+              onClick={() => setActivo(activo === b.numero ? null : b.numero)}
+              className="w-full flex items-center justify-between px-4 h-11 rounded-lg border border-slate-200 bg-white text-sm"
+            >
+              <span className="font-medium">Bulto {b.numero}</span>
+              <span className="text-xs text-slate-400">{activo === b.numero ? 'cerrar' : 'corregir'}</span>
+            </button>
+            {activo === b.numero && (
+              <ControlBulto
+                inicial={b.controles.map((c) => ({ isbn: c.isbn, titulo: c.titulo ?? c.isbn, cantidad: c.cantidad, malEstado: c.malEstado }))}
+                pesoInicial={b.peso ?? ''}
+                etiqueta="Guardar corrección"
+                onGuardar={(payload) =>
+                  api.patch(`/devoluciones/autorizaciones/${d.id}/bultos/${b.numero}/correccion`, {
+                    ...payload,
+                    observaciones: obs || undefined,
+                  }) as Promise<void>
+                }
+                onDone={() => { setActivo(null); onDone(); }}
+                onError={onError}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 function PanelReconciliacion({ id, d }: { id: number; d: Detalle }) {
-  const [rec, setRec] = useState<{ isbn: string; declarado: number; recibido: number; bueno: number; malo: number }[] | null>(null);
+  const [rec, setRec] = useState<{ isbn: string; titulo: string | null; declarado: number; recibido: number; bueno: number; malo: number }[] | null>(null);
   useEffect(() => { api.get<typeof rec>(`/devoluciones/autorizaciones/${id}/reconciliacion`).then(setRec).catch(() => setRec([])); }, [id]);
   return (
     <Card>
       <h2 className="font-semibold mb-1 flex items-center gap-2 text-emerald-700"><CheckCircle2 className="h-5 w-5" /> Procesado</h2>
       <p className="text-sm text-slate-500 mb-4">Buenos → {d.ubicacionDestinoBueno} · Malos → {d.ubicacionDestinoMalo}</p>
-      <table className="w-full text-sm">
-        <thead className="text-slate-500 text-left"><tr>
-          <th className="py-2 font-medium">ISBN</th><th className="font-medium text-right">Decl.</th><th className="font-medium text-right">Recib.</th><th className="font-medium text-right">Bueno</th><th className="font-medium text-right">Malo</th>
-        </tr></thead>
-        <tbody className="divide-y divide-slate-100">
-          {rec?.map((r) => (
-            <tr key={r.isbn}>
-              <td className="py-2 tabnum text-slate-500">{r.isbn}</td>
-              <td className="text-right tabnum">{r.declarado}</td>
-              <td className="text-right tabnum">{r.recibido}</td>
-              <td className="text-right tabnum text-emerald-700 font-semibold">{r.bueno}</td>
-              <td className="text-right tabnum text-red-600 font-semibold">{r.malo}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="text-slate-500 text-left"><tr>
+            <th className="py-2 font-medium">Título</th><th className="font-medium">ISBN</th><th className="font-medium text-right">Decl.</th><th className="font-medium text-right">Recib.</th><th className="font-medium text-right">Bueno</th><th className="font-medium text-right">Malo</th>
+          </tr></thead>
+          <tbody className="divide-y divide-slate-100">
+            {rec?.map((r) => (
+              <tr key={r.isbn}>
+                <td className="py-2 pr-2 max-w-48 truncate">{r.titulo ?? '—'}</td>
+                <td className="tabnum text-slate-500">{r.isbn}</td>
+                <td className="text-right tabnum">{r.declarado}</td>
+                <td className="text-right tabnum">{r.recibido}</td>
+                <td className="text-right tabnum text-emerald-700 font-semibold">{r.bueno}</td>
+                <td className="text-right tabnum text-red-600 font-semibold">{r.malo}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </Card>
   );
 }
@@ -360,7 +472,10 @@ function ResumenDatos({ d }: { d: Detalle }) {
     <Card className="text-sm">
       <h2 className="font-semibold mb-3">Datos</h2>
       <dl className="grid grid-cols-2 gap-y-2 gap-x-4 text-slate-600">
-        <dt className="text-slate-400">Cliente</dt><dd className="tabnum">{d.clienteId}</dd>
+        <dt className="text-slate-400">Cliente</dt>
+        <dd>{d.cliente ? `${d.cliente.nroCliente} · ${d.cliente.nombre}` : d.clienteId}</dd>
+        <dt className="text-slate-400">Transportista</dt>
+        <dd>{d.transportista?.nombre ?? '—'}</dd>
         <dt className="text-slate-400">Bultos declarados</dt><dd className="tabnum">{d.bultosDeclarados ?? '—'}</dd>
         <dt className="text-slate-400">Peso declarado</dt><dd className="tabnum">{d.pesoTotalDeclarado ?? '—'} kg</dd>
         <dt className="text-slate-400">Bultos recibidos</dt><dd className="tabnum">{d.bultosRecibidos ?? '—'}</dd>
@@ -371,8 +486,12 @@ function ResumenDatos({ d }: { d: Detalle }) {
         <div className="mt-4">
           <h3 className="text-xs font-semibold text-slate-400 uppercase mb-2">Líneas declaradas</h3>
           {d.declaraciones.map((l) => (
-            <div key={l.id} className="flex justify-between py-1 border-b border-slate-50">
-              <span className="tabnum text-slate-500">{l.isbn}</span><span className="tabnum font-medium">{l.cantidad}</span>
+            <div key={l.id} className="flex justify-between gap-3 py-1 border-b border-slate-50">
+              <span className="truncate">{l.titulo ?? l.isbn}</span>
+              <span className="flex gap-3 shrink-0">
+                <span className="tabnum text-slate-400">{l.isbn}</span>
+                <span className="tabnum font-medium">{l.cantidad}</span>
+              </span>
             </div>
           ))}
         </div>

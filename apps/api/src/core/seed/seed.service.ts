@@ -35,12 +35,37 @@ export class SeedService implements OnApplicationBootstrap {
   }
 
   private async seedPermisos(): Promise<void> {
+    const nuevos: number[] = [];
     for (const [codigo, descripcion] of Object.entries(PERMISOS_DESCRIPCION)) {
-      await this.prisma.permiso.upsert({
-        where: { codigo },
-        update: { descripcion },
-        create: { codigo, descripcion },
+      const existente = await this.prisma.permiso.findUnique({ where: { codigo } });
+      if (existente) {
+        await this.prisma.permiso.update({
+          where: { codigo },
+          data: { descripcion },
+        });
+      } else {
+        const creado = await this.prisma.permiso.create({
+          data: { codigo, descripcion },
+        });
+        nuevos.push(creado.id);
+      }
+    }
+    // Un permiso NUEVO del catálogo se asigna al rol Administrador existente
+    // ("acceso total"): si no, en producción nadie podría usarlo ni asignarlo.
+    // Los permisos ya existentes no se tocan (los maneja el ABM de roles).
+    if (nuevos.length > 0) {
+      const admin = await this.prisma.rol.findUnique({
+        where: { nombre: 'Administrador' },
       });
+      if (admin) {
+        for (const permisoId of nuevos) {
+          await this.prisma.rolPermiso.upsert({
+            where: { rolId_permisoId: { rolId: admin.id, permisoId } },
+            update: {},
+            create: { rolId: admin.id, permisoId },
+          });
+        }
+      }
     }
   }
 

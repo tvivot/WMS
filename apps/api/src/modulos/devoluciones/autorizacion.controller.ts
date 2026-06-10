@@ -16,6 +16,7 @@ import { AutorizacionService } from './autorizacion.service';
 import {
   CerrarDto,
   ControlarBultoDto,
+  CorregirControlDto,
   CrearAutorizacionDto,
   DeclararDto,
   IngresoDto,
@@ -46,14 +47,15 @@ export class AutorizacionController {
     });
   }
 
+  // Propiedad verificada en el servicio: un cliente solo ve lo suyo.
   @Get(':id')
-  detalle(@Param('id', ParseIntPipe) id: number) {
-    return this.svc.detalle(id);
+  detalle(@Actor() actor: JwtPayload, @Param('id', ParseIntPipe) id: number) {
+    return this.svc.detalleAutorizado(actor, id);
   }
 
   @Get(':id/reconciliacion')
-  reconciliacion(@Param('id', ParseIntPipe) id: number) {
-    return this.svc.calcularReconciliacion(id);
+  reconciliacion(@Actor() actor: JwtPayload, @Param('id', ParseIntPipe) id: number) {
+    return this.svc.reconciliacionAutorizada(actor, id);
   }
 
   @RequierePermiso(PERMISOS.SOLICITUD_APROBAR)
@@ -117,5 +119,17 @@ export class AutorizacionController {
     @Body() dto: CerrarDto,
   ) {
     return this.svc.cerrar(actor, id, dto);
+  }
+
+  /** Corrección post-Procesado: solo quien tenga devolucion.corregir (Admin por defecto). */
+  @RequierePermiso(PERMISOS.DEVOLUCION_CORREGIR)
+  @Patch(':id/bultos/:numero/correccion')
+  corregir(
+    @Actor() actor: JwtPayload,
+    @Param('id', ParseIntPipe) id: number,
+    @Param('numero', ParseIntPipe) numero: number,
+    @Body() dto: CorregirControlDto,
+  ) {
+    return this.svc.corregirControl(actor, id, numero, dto);
   }
 }

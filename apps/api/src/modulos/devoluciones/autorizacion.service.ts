@@ -15,9 +15,11 @@ import type { JwtPayload } from '../../core/auth/jwt-payload';
 import {
   CerrarDto,
   ControlarBultoDto,
+  CorregirControlDto,
   CrearAutorizacionDto,
   DeclararDto,
   IngresoDto,
+  LineaControlDto,
   RecibirDto,
 } from './dto';
 import {
@@ -57,6 +59,17 @@ export class AutorizacionService {
     if (actor.tipo === 'cliente' && actor.sub !== clienteId) {
       throw new ForbiddenException('No es tu autorización');
     }
+  }
+
+  /** Acumula observaciones de cada etapa sin pisar las anteriores. */
+  private acumularObservacion(
+    previa: string | null,
+    etapa: string,
+    nueva?: string,
+  ): string | null {
+    if (!nueva) return previa;
+    const etiquetada = `${etapa}: ${nueva}`;
+    return previa ? `${previa} | ${etiquetada}` : etiquetada;
   }
 
   private exigirEstado(actual: DevEstado, esperado: DevEstado): void {
@@ -180,12 +193,25 @@ export class AutorizacionService {
         noCatalogados.push(linea.isbn);
         continue;
       }
-      resueltas.push({ isbn: norm, productoId: prod.id, cantidad: linea.cantidad });
+      // Mismo ISBN repetido en el payload (p.ej. ISBN-10 y 13 del mismo título): sumar.
+      const ya = resueltas.find((r) => r.isbn === norm);
+      if (ya) ya.cantidad += linea.cantidad;
+      else resueltas.push({ isbn: norm, productoId: prod.id, cantidad: linea.cantidad });
     }
     if (noCatalogados.length > 0) {
       throw new BadRequestException(
         `ISBN no catalogados (se avisó, no se cargan): ${noCatalogados.join(', ')}`,
       );
+    }
+
+    // El transportista declarado debe existir y estar activo.
+    if (dto.transportistaId !== undefined && dto.transportistaId !== null) {
+      const t = await this.prisma.transportista.findUnique({
+        where: { id: dto.transportistaId },
+      });
+      if (!t || !t.activo) {
+        throw new BadRequestException('Transportista inexistente o inactivo');
+      }
     }
 
     await this.prisma.$transaction([
@@ -216,9 +242,14 @@ export class AutorizacionService {
     this.verificarPropiedad(actor, a.clienteId);
     this.exigirEstado(a.estado, DevEstado.APROBADO);
     const lineas = await this.prisma.devDeclaracion.count({ where: { autorizacionId: id } });
-    if (lineas === 0 || !a.bultosDeclarados || a.pesoTotalDeclarado === null) {
+    if (
+      lineas === 0 ||
+      !a.bultosDeclarados ||
+      a.pesoTotalDeclarado === null ||
+      a.transportistaId === null
+    ) {
       throw new BadRequestException(
-        'Faltan datos para despachar: líneas, bultos y peso total',
+        'Faltan datos para despachar: líneas, bultos, peso total y transportista',
       );
     }
     return this.transicionar(id, actor, a.estado, DevEstado.EN_TRANSITO);
@@ -250,7 +281,7 @@ export class AutorizacionService {
     ]);
     return this.transicionar(id, actor, a.estado, DevEstado.ENTREGADO, {
       bultosRecibidos: dto.bultosRecibidos,
-      observaciones: dto.observaciones ?? a.observaciones,
+      observaciones: this.acumularObservacion(a.observaciones, 'Recepción', dto.observaciones),
     });
   }
 
@@ -267,6 +298,53 @@ export class AutorizacionService {
     });
   }
 
+  /**
+   * Resuelve y valida las líneas de control de un bulto: ISBN normalizado y
+   * catalogado (misma regla que la declaración: avisar, no cargar fantasmas),
+   * mal estado ≤ cantidad.
+   */
+  private async resolverControles(
+    bultoId: number,
+    controles: LineaControlDto[],
+  ): Promise<
+    { bultoId: number; isbn: string; productoId: number; cantidad: number; malEstado: number }[]
+  > {
+    const filas: { bultoId: number; isbn: string; productoId: number; cantidad: number; malEstado: number }[] = [];
+    const noCatalogados: string[] = [];
+    for (const c of controles) {
+      const norm = normalizarIsbn(c.isbn);
+      if (!norm) throw new BadRequestException(`ISBN inválido: ${c.isbn}`);
+      const malo = c.malEstado ?? 0;
+      if (malo > c.cantidad) {
+        throw new BadRequestException('mal estado no puede superar la cantidad');
+      }
+      const prod = await this.catalogo.resolverPorIsbnOpcional(norm);
+      if (!prod) {
+        noCatalogados.push(norm);
+        continue;
+      }
+      const ya = filas.find((f) => f.isbn === norm);
+      if (ya) {
+        ya.cantidad += c.cantidad;
+        ya.malEstado += malo;
+      } else {
+        filas.push({
+          bultoId,
+          isbn: norm,
+          productoId: prod.id,
+          cantidad: c.cantidad,
+          malEstado: malo,
+        });
+      }
+    }
+    if (noCatalogados.length > 0) {
+      throw new BadRequestException(
+        `ISBN no catalogados (cargalos al catálogo antes de controlar): ${noCatalogados.join(', ')}`,
+      );
+    }
+    return filas;
+  }
+
   /** Control de un bulto: cantidades + mal estado por ISBN (estado INGRESO_DEPOSITO). */
   async controlarBulto(
     actor: JwtPayload,
@@ -281,23 +359,7 @@ export class AutorizacionService {
     });
     if (!bulto) throw new NotFoundException('Bulto inexistente');
 
-    const filas: { bultoId: number; isbn: string; productoId: number | null; cantidad: number; malEstado: number }[] = [];
-    for (const c of dto.controles) {
-      const norm = normalizarIsbn(c.isbn);
-      if (!norm) throw new BadRequestException(`ISBN inválido: ${c.isbn}`);
-      const malo = c.malEstado ?? 0;
-      if (malo > c.cantidad) {
-        throw new BadRequestException('mal estado no puede superar la cantidad');
-      }
-      const prod = await this.catalogo.resolverPorIsbnOpcional(norm);
-      filas.push({
-        bultoId: bulto.id,
-        isbn: norm,
-        productoId: prod?.id ?? null,
-        cantidad: c.cantidad,
-        malEstado: malo,
-      });
-    }
+    const filas = await this.resolverControles(bulto.id, dto.controles);
 
     await this.prisma.$transaction([
       this.prisma.devControl.deleteMany({ where: { bultoId: bulto.id } }),
@@ -349,11 +411,12 @@ export class AutorizacionService {
     // Control de peso: suma de bultos vs peso total declarado (no bloquea, exige observación).
     const sumaPesos = bultos.reduce((acc, b) => acc + (b.peso ? Number(b.peso) : 0), 0);
     const declarado = a.pesoTotalDeclarado ? Number(a.pesoTotalDeclarado) : null;
+    // La observación debe ser PROPIA del cierre: una observación previa
+    // (p.ej. de la recepción) no justifica la diferencia de peso.
     if (
       declarado !== null &&
       Math.abs(sumaPesos - declarado) > PESO_TOLERANCIA &&
-      !dto.observaciones &&
-      !a.observaciones
+      !dto.observaciones
     ) {
       throw new BadRequestException(
         `Suma de pesos (${sumaPesos}) ≠ peso declarado (${declarado}): observación obligatoria`,
@@ -370,7 +433,7 @@ export class AutorizacionService {
       {
         ubicacionDestinoBueno: dto.ubicacionDestinoBueno,
         ubicacionDestinoMalo: dto.ubicacionDestinoMalo,
-        observaciones: dto.observaciones ?? a.observaciones,
+        observaciones: this.acumularObservacion(a.observaciones, 'Cierre', dto.observaciones),
       },
     );
 
@@ -389,7 +452,85 @@ export class AutorizacionService {
     return { autorizacion: actualizada, reconciliacion };
   }
 
+  /**
+   * Corrección post-Procesado (permiso devolucion.corregir; por defecto solo
+   * Administrador). Una devolución Procesada NO se reabre: la corrección
+   * reemplaza el control de un bulto, queda en auditoría y re-emite
+   * devolucion.procesada con correccion=true para los consumidores.
+   */
+  async corregirControl(
+    actor: JwtPayload,
+    id: number,
+    numero: number,
+    dto: CorregirControlDto,
+  ) {
+    const a = await this.obtenerOr404(id);
+    this.exigirEstado(a.estado, DevEstado.PROCESADO);
+    const bulto = await this.prisma.devBulto.findUnique({
+      where: { autorizacionId_numero: { autorizacionId: id, numero } },
+    });
+    if (!bulto) throw new NotFoundException('Bulto inexistente');
+
+    const filas = await this.resolverControles(bulto.id, dto.controles);
+
+    await this.prisma.$transaction([
+      this.prisma.devControl.deleteMany({ where: { bultoId: bulto.id } }),
+      this.prisma.devControl.createMany({ data: filas }),
+      this.prisma.devBulto.update({
+        where: { id: bulto.id },
+        data: { peso: dto.peso ?? bulto.peso },
+      }),
+      this.prisma.devAutorizacion.update({
+        where: { id },
+        data: {
+          observaciones: this.acumularObservacion(
+            a.observaciones,
+            `Corrección bulto ${numero}`,
+            dto.observaciones ?? 'control corregido',
+          ),
+        },
+      }),
+    ]);
+    await this.auditoria.registrar({
+      actorId: actor.sub,
+      actorTipo: actor.tipo,
+      accion: 'correccion_control',
+      entidad: 'dev_bulto',
+      entidadId: `${id}/${numero}`,
+      detalle: { lineas: filas.length, observaciones: dto.observaciones ?? null },
+    });
+
+    const reconciliacion = await this.calcularReconciliacion(id);
+    const ev: DevolucionProcesadaEvent = {
+      autorizacionId: id,
+      clienteId: a.clienteId,
+      depositoId: a.depositoId,
+      reconciliacion,
+      ubicacionDestinoBueno: a.ubicacionDestinoBueno ?? '',
+      ubicacionDestinoMalo: a.ubicacionDestinoMalo ?? '',
+      correccion: true,
+      ts: new Date().toISOString(),
+    };
+    this.eventos.emit(DEVOLUCION_PROCESADA, ev);
+
+    return { autorizacion: await this.detalle(id), reconciliacion };
+  }
+
   // ---- consultas ----
+
+  /** Detalle con control de propiedad: un cliente solo ve lo suyo. */
+  async detalleAutorizado(actor: JwtPayload, id: number) {
+    const a = await this.obtenerOr404(id);
+    this.verificarPropiedad(actor, a.clienteId);
+    return this.detalle(id);
+  }
+
+  /** Reconciliación con control de propiedad: un cliente solo ve lo suyo. */
+  async reconciliacionAutorizada(actor: JwtPayload, id: number) {
+    const a = await this.obtenerOr404(id);
+    this.verificarPropiedad(actor, a.clienteId);
+    return this.calcularReconciliacion(id);
+  }
 
   /** Reconciliación declarado vs recibido por ISBN (agrega sobre todos los bultos). */
   async calcularReconciliacion(id: number): Promise<ReconciliacionLinea[]> {
@@ -405,7 +546,7 @@ export class AutorizacionService {
     const get = (isbn: string, productoId: number | null): ReconciliacionLinea => {
       let l = mapa.get(isbn);
       if (!l) {
-        l = { isbn, productoId, declarado: 0, recibido: 0, bueno: 0, malo: 0 };
+        l = { isbn, productoId, titulo: null, declarado: 0, recibido: 0, bueno: 0, malo: 0 };
         mapa.set(isbn, l);
       }
       if (l.productoId === null && productoId !== null) l.productoId = productoId;
@@ -423,7 +564,26 @@ export class AutorizacionService {
         l.bueno += c.cantidad - c.malEstado;
       }
     }
-    return [...mapa.values()].sort((a, b) => a.isbn.localeCompare(b.isbn));
+    const lineas = [...mapa.values()].sort((a, b) => a.isbn.localeCompare(b.isbn));
+
+    // Título desde el catálogo (referencia por ID, sin FK).
+    const titulos = await this.titulosPorProducto(
+      lineas.map((l) => l.productoId).filter((x): x is number => x !== null),
+    );
+    for (const l of lineas) {
+      l.titulo = l.productoId !== null ? (titulos.get(l.productoId) ?? null) : null;
+    }
+    return lineas;
+  }
+
+  private async titulosPorProducto(ids: number[]): Promise<Map<number, string>> {
+    const unicos = [...new Set(ids)];
+    if (unicos.length === 0) return new Map();
+    const productos = await this.prisma.producto.findMany({
+      where: { id: { in: unicos } },
+      select: { id: true, titulo: true },
+    });
+    return new Map(productos.map((p) => [p.id, p.titulo]));
   }
 
   async listar(actor: JwtPayload, params: { estado?: DevEstado; clienteId?: number }) {
@@ -432,10 +592,20 @@ export class AutorizacionService {
     // Cliente: solo ve lo suyo.
     if (actor.tipo === 'cliente') where.clienteId = actor.sub;
     else if (params.clienteId) where.clienteId = params.clienteId;
-    return this.prisma.devAutorizacion.findMany({
+    const items = await this.prisma.devAutorizacion.findMany({
       where,
       orderBy: { id: 'desc' },
     });
+    // Nombre del cliente para la grilla (referencia por ID, sin FK).
+    const ids = [...new Set(items.map((i) => i.clienteId))];
+    const clientes = ids.length
+      ? await this.prisma.cliente.findMany({
+          where: { id: { in: ids } },
+          select: { id: true, nroCliente: true, nombre: true },
+        })
+      : [];
+    const mapa = new Map(clientes.map((c) => [c.id, c]));
+    return items.map((i) => ({ ...i, cliente: mapa.get(i.clienteId) ?? null }));
   }
 
   async detalle(id: number) {
@@ -447,6 +617,37 @@ export class AutorizacionService {
       },
     });
     if (!a) throw new NotFoundException('Autorización no encontrada');
-    return a;
+
+    // Datos del núcleo resueltos por ID (sin FK): títulos, cliente, transportista.
+    const titulos = await this.titulosPorProducto([
+      ...a.declaraciones.map((d) => d.productoId).filter((x): x is number => x !== null),
+      ...a.bultos.flatMap((b) =>
+        b.controles.map((c) => c.productoId).filter((x): x is number => x !== null),
+      ),
+    ]);
+    const [cliente, transportista] = await Promise.all([
+      this.prisma.cliente.findUnique({
+        where: { id: a.clienteId },
+        select: { id: true, nroCliente: true, nombre: true },
+      }),
+      a.transportistaId
+        ? this.prisma.transportista.findUnique({
+            where: { id: a.transportistaId },
+            select: { id: true, nombre: true },
+          })
+        : Promise.resolve(null),
+    ]);
+
+    const conTitulo = <T extends { productoId: number | null }>(x: T) => ({
+      ...x,
+      titulo: x.productoId !== null ? (titulos.get(x.productoId) ?? null) : null,
+    });
+    return {
+      ...a,
+      cliente,
+      transportista,
+      declaraciones: a.declaraciones.map(conTitulo),
+      bultos: a.bultos.map((b) => ({ ...b, controles: b.controles.map(conTitulo) })),
+    };
   }
 }

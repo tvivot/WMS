@@ -13,6 +13,8 @@ export const PERMISOS = {
   ROL_ADMINISTRAR: 'rol.administrar',
   INFORMES_VER: 'informes.ver',
   CATALOGO_ADMINISTRAR: 'catalogo.administrar',
+  TRANSPORTISTA_ADMINISTRAR: 'transportista.administrar',
+  DEVOLUCION_CORREGIR: 'devolucion.corregir',
 } as const;
 
 export type PermisoCodigo = (typeof PERMISOS)[keyof typeof PERMISOS];
@@ -28,6 +30,9 @@ export const PERMISOS_DESCRIPCION: Record<string, string> = {
   [PERMISOS.ROL_ADMINISTRAR]: 'Administrar roles y permisos',
   [PERMISOS.INFORMES_VER]: 'Ver informes',
   [PERMISOS.CATALOGO_ADMINISTRAR]: 'Administrar catálogo de productos',
+  [PERMISOS.TRANSPORTISTA_ADMINISTRAR]: 'Administrar transportistas',
+  [PERMISOS.DEVOLUCION_CORREGIR]:
+    'Corregir devoluciones ya procesadas (queda en auditoría)',
 };
 
 const TODOS = Object.values(PERMISOS);
@@ -54,6 +59,7 @@ export const ROLES_DEFAULT: Array<{
       PERMISOS.SOLICITUD_CREAR,
       PERMISOS.SOLICITUD_APROBAR,
       PERMISOS.CLIENTE_ADMINISTRAR,
+      PERMISOS.TRANSPORTISTA_ADMINISTRAR,
       PERMISOS.INFORMES_VER,
     ],
   },

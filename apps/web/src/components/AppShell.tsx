@@ -9,6 +9,7 @@ import {
   Menu,
   PackageCheck,
   Shield,
+  Truck,
   Users,
   X,
 } from 'lucide-react';
@@ -28,6 +29,7 @@ const ITEMS: NavItem[] = [
   { to: '/informes', label: 'Informes', icon: BarChart3, permiso: PERMISOS.INFORMES_VER },
   { to: '/catalogo', label: 'Catálogo', icon: BookOpen, permiso: PERMISOS.CATALOGO_ADMINISTRAR },
   { to: '/clientes', label: 'Clientes', icon: Building2, permiso: PERMISOS.CLIENTE_ADMINISTRAR },
+  { to: '/transportistas', label: 'Transportistas', icon: Truck, permiso: PERMISOS.TRANSPORTISTA_ADMINISTRAR },
   { to: '/usuarios', label: 'Usuarios', icon: Users, permiso: PERMISOS.USUARIO_ADMINISTRAR },
   { to: '/roles', label: 'Roles', icon: Shield, permiso: PERMISOS.ROL_ADMINISTRAR },
 ];

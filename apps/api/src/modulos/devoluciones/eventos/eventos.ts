@@ -19,6 +19,7 @@ export interface DevolucionEstadoCambiadoEvent {
 export interface ReconciliacionLinea {
   isbn: string;
   productoId: number | null;
+  titulo: string | null;
   declarado: number;
   recibido: number;
   bueno: number;
@@ -32,5 +33,7 @@ export interface DevolucionProcesadaEvent {
   reconciliacion: ReconciliacionLinea[];
   ubicacionDestinoBueno: string;
   ubicacionDestinoMalo: string;
+  /** true cuando re-emite por una corrección post-Procesado (reemplaza el resultado anterior). */
+  correccion?: boolean;
   ts: string;
 }

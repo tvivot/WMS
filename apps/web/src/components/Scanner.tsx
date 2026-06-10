@@ -27,6 +27,7 @@ export function Scanner({ onScan, placeholder = 'Escanear o tipear ISBN…' }: P
   const [error, setError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const ultimoRef = useRef<{ code: string; t: number }>({ code: '', t: 0 });
+  const vistosRef = useRef<Map<string, number>>(new Map());
   const stopRef = useRef<(() => void) | null>(null);
 
   const emitir = (code: string) => {
@@ -35,6 +36,23 @@ export function Scanner({ onScan, placeholder = 'Escanear o tipear ISBN…' }: P
     const now = Date.now();
     if (ultimoRef.current.code === limpio && now - ultimoRef.current.t < 1500) return;
     ultimoRef.current = { code: limpio, t: now };
+    onScan(limpio);
+    if (navigator.vibrate) navigator.vibrate(40);
+  };
+
+  /**
+   * Detección por cámara: el mismo código sostenido frente al lente NO debe
+   * re-sumar en cada frame. Solo se emite si el código dejó de verse por un
+   * rato (salió del cuadro) — para sumar otra copia, retirá el libro y volvé
+   * a mostrarlo.
+   */
+  const emitirDesdeCamara = (code: string) => {
+    const limpio = code.trim();
+    if (!limpio) return;
+    const now = Date.now();
+    const ultimaVez = vistosRef.current.get(limpio);
+    vistosRef.current.set(limpio, now);
+    if (ultimaVez !== undefined && now - ultimaVez < 1200) return; // sigue en cuadro
     onScan(limpio);
     if (navigator.vibrate) navigator.vibrate(40);
   };
@@ -67,7 +85,7 @@ export function Scanner({ onScan, placeholder = 'Escanear o tipear ISBN…' }: P
             if (cancelado) return;
             try {
               const r = await det.detect(video);
-              if (r[0]?.rawValue) emitir(r[0].rawValue);
+              if (r[0]?.rawValue) emitirDesdeCamara(r[0].rawValue);
             } catch {
               /* ignora frames sin código */
             }
@@ -79,7 +97,7 @@ export function Scanner({ onScan, placeholder = 'Escanear o tipear ISBN…' }: P
           // Fallback ZXing (iOS Safari sin BarcodeDetector).
           const reader = new BrowserMultiFormatReader();
           const controls = await reader.decodeFromStream(stream, video, (res) => {
-            if (res) emitir(res.getText());
+            if (res) emitirDesdeCamara(res.getText());
           });
           stopRef.current = () => {
             controls.stop();

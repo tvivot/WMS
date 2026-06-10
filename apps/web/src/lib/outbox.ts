@@ -15,18 +15,31 @@ export interface ControlPendiente {
   ts: number;
 }
 
+/** Control encolado que el servidor RECHAZÓ al resincronizar (error de negocio). */
+export interface ControlFallido extends ControlPendiente {
+  error: string;
+}
+
 const KEY = 'wms_outbox_control';
+const KEY_FALLIDOS = 'wms_outbox_fallidos';
 const listeners = new Set<() => void>();
 
-function leer(): ControlPendiente[] {
+function leerDe<T>(key: string): T[] {
   try {
-    return JSON.parse(localStorage.getItem(KEY) ?? '[]');
+    return JSON.parse(localStorage.getItem(key) ?? '[]');
   } catch {
     return [];
   }
 }
+const leer = () => leerDe<ControlPendiente>(KEY);
+const leerFallidos = () => leerDe<ControlFallido>(KEY_FALLIDOS);
+
 function escribir(items: ControlPendiente[]): void {
   localStorage.setItem(KEY, JSON.stringify(items));
+  listeners.forEach((l) => l());
+}
+function escribirFallidos(items: ControlFallido[]): void {
+  localStorage.setItem(KEY_FALLIDOS, JSON.stringify(items));
   listeners.forEach((l) => l());
 }
 
@@ -35,6 +48,12 @@ export function pendientes(): ControlPendiente[] {
 }
 export function cantidadPendiente(): number {
   return leer().length;
+}
+export function fallidos(): ControlFallido[] {
+  return leerFallidos();
+}
+export function descartarFallido(id: string): void {
+  escribirFallidos(leerFallidos().filter((f) => f.id !== id));
 }
 export function suscribir(cb: () => void): () => void {
   listeners.add(cb);
@@ -104,8 +123,11 @@ export async function sincronizar(): Promise<number> {
         ok++;
       } catch (err) {
         if (err instanceof ApiError) {
-          // Error de negocio: lo descartamos para no trabar la cola (quedó obsoleto).
+          // Error de negocio: NO se descarta en silencio — pasa a la lista de
+          // fallidos para que el operario lo vea y decida (es un control
+          // hecho offline que el servidor rechazó).
           escribir(leer().filter((i) => i.id !== item.id));
+          escribirFallidos([...leerFallidos(), { ...item, error: err.message }]);
         } else {
           // Red: cortamos y reintentamos después.
           break;

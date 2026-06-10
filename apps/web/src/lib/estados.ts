@@ -45,4 +45,6 @@ export const PERMISOS = {
   USUARIO_ADMINISTRAR: 'usuario.administrar',
   ROL_ADMINISTRAR: 'rol.administrar',
   INFORMES_VER: 'informes.ver',
+  TRANSPORTISTA_ADMINISTRAR: 'transportista.administrar',
+  DEVOLUCION_CORREGIR: 'devolucion.corregir',
 } as const;

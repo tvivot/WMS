@@ -370,6 +370,63 @@ paths:
         "200":
           description: ""
       tags: *a5
+  /api/transportistas:
+    get:
+      operationId: TransportistasController_listarActivos
+      parameters: []
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                type: object
+      tags: &a6
+        - Transportistas
+    post:
+      operationId: TransportistasController_crear
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CrearTransportistaDto"
+      responses:
+        "201":
+          description: ""
+      tags: *a6
+  /api/transportistas/admin:
+    get:
+      operationId: TransportistasController_listar
+      parameters: []
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                type: object
+      tags: *a6
+  /api/transportistas/{id}:
+    put:
+      operationId: TransportistasController_editar
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EditarTransportistaDto"
+      responses:
+        "200":
+          description: ""
+      tags: *a6
   /api/devoluciones/autorizaciones:
     post:
       operationId: AutorizacionController_crear
@@ -383,7 +440,7 @@ paths:
       responses:
         "201":
           description: ""
-      tags: &a6
+      tags: &a7
         - Autorizacion
     get:
       operationId: AutorizacionController_listar
@@ -401,7 +458,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a6
+      tags: *a7
   /api/devoluciones/autorizaciones/{id}:
     get:
       operationId: AutorizacionController_detalle
@@ -414,11 +471,7 @@ paths:
       responses:
         "200":
           description: ""
-          content:
-            application/json:
-              schema:
-                type: object
-      tags: *a6
+      tags: *a7
   /api/devoluciones/autorizaciones/{id}/reconciliacion:
     get:
       operationId: AutorizacionController_reconciliacion
@@ -437,7 +490,7 @@ paths:
                 type: array
                 items:
                   type: object
-      tags: *a6
+      tags: *a7
   /api/devoluciones/autorizaciones/{id}/aprobar:
     patch:
       operationId: AutorizacionController_aprobar
@@ -450,7 +503,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a6
+      tags: *a7
   /api/devoluciones/autorizaciones/{id}/declaracion:
     patch:
       operationId: AutorizacionController_declarar
@@ -469,11 +522,7 @@ paths:
       responses:
         "200":
           description: ""
-          content:
-            application/json:
-              schema:
-                type: object
-      tags: *a6
+      tags: *a7
   /api/devoluciones/autorizaciones/{id}/despachar:
     patch:
       operationId: AutorizacionController_despachar
@@ -486,7 +535,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a6
+      tags: *a7
   /api/devoluciones/autorizaciones/{id}/recibir:
     patch:
       operationId: AutorizacionController_recibir
@@ -505,7 +554,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a6
+      tags: *a7
   /api/devoluciones/autorizaciones/{id}/ingreso:
     patch:
       operationId: AutorizacionController_ingreso
@@ -524,7 +573,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a6
+      tags: *a7
   /api/devoluciones/autorizaciones/{id}/bultos/{numero}/control:
     post:
       operationId: AutorizacionController_controlar
@@ -548,11 +597,7 @@ paths:
       responses:
         "201":
           description: ""
-          content:
-            application/json:
-              schema:
-                type: object
-      tags: *a6
+      tags: *a7
   /api/devoluciones/autorizaciones/{id}/cierre:
     patch:
       operationId: AutorizacionController_cerrar
@@ -571,7 +616,31 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a6
+      tags: *a7
+  /api/devoluciones/autorizaciones/{id}/bultos/{numero}/correccion:
+    patch:
+      operationId: AutorizacionController_corregir
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+        - name: numero
+          required: true
+          in: path
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CorregirControlDto"
+      responses:
+        "200":
+          description: ""
+      tags: *a7
   /api/devoluciones/informes/resumen:
     get:
       operationId: InformesController_resumen
@@ -579,7 +648,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: &a7
+      tags: &a8
         - Informes
   /api/devoluciones/informes/por-cliente:
     get:
@@ -588,7 +657,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a7
+      tags: *a8
   /api/devoluciones/informes/serie:
     get:
       operationId: InformesController_serie
@@ -596,7 +665,7 @@ paths:
       responses:
         "200":
           description: ""
-      tags: *a7
+      tags: *a8
   /api/health:
     get:
       operationId: HealthController_check
@@ -660,6 +729,12 @@ components:
     EditarRolDto:
       type: object
       properties: {}
+    CrearTransportistaDto:
+      type: object
+      properties: {}
+    EditarTransportistaDto:
+      type: object
+      properties: {}
     CrearAutorizacionDto:
       type: object
       properties: {}
@@ -676,5 +751,8 @@ components:
       type: object
       properties: {}
     CerrarDto:
+      type: object
+      properties: {}
+    CorregirControlDto:
       type: object
       properties: {}
