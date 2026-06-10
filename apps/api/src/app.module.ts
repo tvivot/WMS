@@ -22,6 +22,8 @@ import { DevolucionesModule } from './modulos/devoluciones/devoluciones.module';
     AuthModule,
     SeedModule,
     CatalogoModule,
+    ClientesModule,
+    UsuariosModule,
     DevolucionesModule,
     HealthModule,
     // Sirve la PWA compilada. En runtime, __dirname = dist/, así que el path

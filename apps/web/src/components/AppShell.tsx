@@ -1,11 +1,14 @@
 import { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
+  BarChart3,
   BookOpen,
+  Building2,
   ClipboardList,
   LogOut,
   Menu,
   PackageCheck,
+  Users,
   X,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
@@ -20,12 +23,10 @@ interface NavItem {
 
 const ITEMS: NavItem[] = [
   { to: '/devoluciones', label: 'Devoluciones', icon: ClipboardList },
-  {
-    to: '/catalogo',
-    label: 'Catálogo',
-    icon: BookOpen,
-    permiso: PERMISOS.CATALOGO_ADMINISTRAR,
-  },
+  { to: '/informes', label: 'Informes', icon: BarChart3, permiso: PERMISOS.INFORMES_VER },
+  { to: '/catalogo', label: 'Catálogo', icon: BookOpen, permiso: PERMISOS.CATALOGO_ADMINISTRAR },
+  { to: '/clientes', label: 'Clientes', icon: Building2, permiso: PERMISOS.CLIENTE_ADMINISTRAR },
+  { to: '/usuarios', label: 'Usuarios', icon: Users, permiso: PERMISOS.USUARIO_ADMINISTRAR },
 ];
 
 export function AppShell() {

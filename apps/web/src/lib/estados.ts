@@ -41,5 +41,7 @@ export const PERMISOS = {
   DEPOSITO_INGRESAR: 'deposito.ingresar',
   DEPOSITO_CONTROLAR: 'deposito.controlar',
   CATALOGO_ADMINISTRAR: 'catalogo.administrar',
+  CLIENTE_ADMINISTRAR: 'cliente.administrar',
+  USUARIO_ADMINISTRAR: 'usuario.administrar',
   INFORMES_VER: 'informes.ver',
 } as const;

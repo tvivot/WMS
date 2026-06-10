@@ -3,6 +3,9 @@ import { AuthProvider, useAuth } from './lib/auth';
 import { AppShell } from './components/AppShell';
 import { Login } from './pages/Login';
 import { Catalogo } from './pages/Catalogo';
+import { Clientes } from './pages/Clientes';
+import { Usuarios } from './pages/Usuarios';
+import { Informes } from './pages/Informes';
 import { DevolucionesLista } from './pages/devoluciones/Lista';
 import { DevolucionDetalle } from './pages/devoluciones/Detalle';
 import { Spinner } from './components/ui';
@@ -34,7 +37,10 @@ export default function App() {
           >
             <Route path="/devoluciones" element={<DevolucionesLista />} />
             <Route path="/devoluciones/:id" element={<DevolucionDetalle />} />
+            <Route path="/informes" element={<Informes />} />
             <Route path="/catalogo" element={<Catalogo />} />
+            <Route path="/clientes" element={<Clientes />} />
+            <Route path="/usuarios" element={<Usuarios />} />
           </Route>
           <Route path="*" element={<Navigate to="/devoluciones" replace />} />
         </Routes>
