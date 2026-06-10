@@ -1,5 +1,6 @@
 import { Controller, Get } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { Publico } from '../core/auth/decoradores';
 
 // Tipo local (evita depender de la resolución del workspace @wms/shared en el
 // build de Hostinger). El contrato compartido vive en packages/shared para la PWA.
@@ -9,6 +10,7 @@ interface HealthResponse {
   ts: string;
 }
 
+@Publico()
 @Controller('health')
 export class HealthController {
   constructor(private readonly prisma: PrismaService) {}
