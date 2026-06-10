@@ -23,15 +23,18 @@ export class HealthController {
       await this.prisma.$queryRaw`SELECT 1`;
       return { status: 'ok', db: 'up', ts: new Date().toISOString() };
     } catch (err) {
-      const e = err as { message?: string; code?: string };
+      const e = err as { message?: string; code?: string; name?: string };
+      // Colapsa saltos de línea (los errores de Prisma arrancan con \n) para
+      // que el detalle no quede vacío.
+      const msg = (e.message ?? String(err)).replace(/\s+/g, ' ').trim();
       return {
         status: 'error',
         db: 'down',
         ts: new Date().toISOString(),
-        // Recortado para no volcar datos sensibles; suele bastar para diagnosticar.
-        detail: (e.message ?? String(err)).split('\n')[0].slice(0, 300),
+        detail: msg.slice(0, 400),
         code: e.code,
-      };
+        name: e.name,
+      } as HealthResponse & { name?: string };
     }
   }
 }
