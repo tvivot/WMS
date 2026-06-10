@@ -4,13 +4,10 @@ import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
-import { runMigrations } from './migrate';
+import { runMigrationsAsync } from './migrate';
 import { construirDocOpenApi } from './openapi.config';
 
 async function bootstrap(): Promise<void> {
-  // Aplica migraciones pendientes antes de levantar (sin terminal en Hostinger).
-  runMigrations();
-
   const app = await NestFactory.create(AppModule);
 
   // Prefijo global: toda la API vive bajo /api; el resto lo sirve la PWA.
@@ -42,13 +39,22 @@ async function bootstrap(): Promise<void> {
   app.enableCors({ origin: process.env.CORS_ORIGIN ?? true });
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
-  // Documentación interactiva + contrato.
-  SwaggerModule.setup('api/docs', app, construirDocOpenApi(app));
+  // Documentación interactiva + contrato. Nunca debe impedir el arranque.
+  try {
+    SwaggerModule.setup('api/docs', app, construirDocOpenApi(app));
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[wms-api] Swagger deshabilitado por error:', (err as Error).message);
+  }
 
+  // PRIMERO escuchar (Hostinger exige que el puerto abra rápido)…
   const port = Number(process.env.PORT ?? 3000);
   await app.listen(port, '0.0.0.0');
   // eslint-disable-next-line no-console
   console.log(`[wms-api] escuchando en http://0.0.0.0:${port} (API en /api, docs en /api/docs)`);
+
+  // …y DESPUÉS migrar en segundo plano (no bloquea el arranque).
+  runMigrationsAsync();
 }
 
 void bootstrap();
