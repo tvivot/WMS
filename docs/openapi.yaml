@@ -1,0 +1,650 @@
+openapi: 3.0.0
+paths:
+  /api/auth/login/usuario:
+    post:
+      operationId: AuthController_loginUsuario
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginUsuarioDto"
+      responses:
+        "201":
+          description: ""
+          content:
+            application/json:
+              schema:
+                type: object
+      tags: &a1
+        - Auth
+  /api/auth/login/cliente:
+    post:
+      operationId: AuthController_loginCliente
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginClienteDto"
+      responses:
+        "201":
+          description: ""
+          content:
+            application/json:
+              schema:
+                type: object
+      tags: *a1
+  /api/auth/me:
+    get:
+      operationId: AuthController_me
+      parameters: []
+      responses:
+        "200":
+          description: ""
+      tags: *a1
+  /api/auth/cambiar-clave:
+    post:
+      operationId: AuthController_cambiarClave
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CambiarClaveDto"
+      responses:
+        "201":
+          description: ""
+      tags: *a1
+  /api/catalogo/productos:
+    get:
+      operationId: CatalogoController_listar
+      parameters:
+        - name: q
+          required: false
+          in: query
+          schema:
+            type: string
+        - name: skip
+          required: false
+          in: query
+          schema:
+            type: string
+        - name: take
+          required: false
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+      tags: &a2
+        - Catalogo
+    post:
+      operationId: CatalogoController_crear
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductoDto"
+      responses:
+        "201":
+          description: ""
+      tags: *a2
+  /api/catalogo/productos/por-isbn/{isbn}:
+    get:
+      operationId: CatalogoController_porIsbn
+      parameters:
+        - name: isbn
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                type: object
+      tags: *a2
+  /api/catalogo/productos/{id}:
+    get:
+      operationId: CatalogoController_obtener
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                type: object
+      tags: *a2
+    put:
+      operationId: CatalogoController_editar
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductoDto"
+      responses:
+        "200":
+          description: ""
+      tags: *a2
+  /api/catalogo/productos/bulk:
+    post:
+      operationId: CatalogoController_bulk
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductosBulkDto"
+      responses:
+        "201":
+          description: ""
+      tags: *a2
+  /api/clientes:
+    get:
+      operationId: ClientesController_listar
+      parameters:
+        - name: q
+          required: false
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+      tags: &a3
+        - Clientes
+    post:
+      operationId: ClientesController_crear
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CrearClienteDto"
+      responses:
+        "201":
+          description: ""
+      tags: *a3
+  /api/clientes/{id}:
+    put:
+      operationId: ClientesController_editar
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EditarClienteDto"
+      responses:
+        "200":
+          description: ""
+      tags: *a3
+  /api/clientes/{id}/reset-clave:
+    post:
+      operationId: ClientesController_reset
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      responses:
+        "201":
+          description: ""
+      tags: *a3
+  /api/usuarios:
+    get:
+      operationId: UsuariosController_listar
+      parameters:
+        - name: q
+          required: false
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+      tags: &a4
+        - Usuarios
+    post:
+      operationId: UsuariosController_crear
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CrearUsuarioDto"
+      responses:
+        "201":
+          description: ""
+      tags: *a4
+  /api/usuarios/roles:
+    get:
+      operationId: UsuariosController_roles
+      parameters: []
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+      tags: *a4
+  /api/usuarios/{id}:
+    put:
+      operationId: UsuariosController_editar
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EditarUsuarioDto"
+      responses:
+        "200":
+          description: ""
+      tags: *a4
+  /api/usuarios/{id}/reset-clave:
+    post:
+      operationId: UsuariosController_reset
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      responses:
+        "201":
+          description: ""
+      tags: *a4
+  /api/roles:
+    get:
+      operationId: RolesController_listar
+      parameters: []
+      responses:
+        "200":
+          description: ""
+      tags: &a5
+        - Roles
+    post:
+      operationId: RolesController_crear
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CrearRolDto"
+      responses:
+        "201":
+          description: ""
+      tags: *a5
+  /api/roles/permisos:
+    get:
+      operationId: RolesController_permisos
+      parameters: []
+      responses:
+        "200":
+          description: ""
+      tags: *a5
+  /api/roles/{id}:
+    put:
+      operationId: RolesController_editar
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EditarRolDto"
+      responses:
+        "200":
+          description: ""
+      tags: *a5
+  /api/devoluciones/autorizaciones:
+    post:
+      operationId: AutorizacionController_crear
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CrearAutorizacionDto"
+      responses:
+        "201":
+          description: ""
+      tags: &a6
+        - Autorizacion
+    get:
+      operationId: AutorizacionController_listar
+      parameters:
+        - name: estado
+          required: false
+          in: query
+          schema:
+            type: string
+        - name: clienteId
+          required: false
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ""
+      tags: *a6
+  /api/devoluciones/autorizaciones/{id}:
+    get:
+      operationId: AutorizacionController_detalle
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                type: object
+      tags: *a6
+  /api/devoluciones/autorizaciones/{id}/reconciliacion:
+    get:
+      operationId: AutorizacionController_reconciliacion
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+      tags: *a6
+  /api/devoluciones/autorizaciones/{id}/aprobar:
+    patch:
+      operationId: AutorizacionController_aprobar
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      responses:
+        "200":
+          description: ""
+      tags: *a6
+  /api/devoluciones/autorizaciones/{id}/declaracion:
+    patch:
+      operationId: AutorizacionController_declarar
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeclararDto"
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                type: object
+      tags: *a6
+  /api/devoluciones/autorizaciones/{id}/despachar:
+    patch:
+      operationId: AutorizacionController_despachar
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      responses:
+        "200":
+          description: ""
+      tags: *a6
+  /api/devoluciones/autorizaciones/{id}/recibir:
+    patch:
+      operationId: AutorizacionController_recibir
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecibirDto"
+      responses:
+        "200":
+          description: ""
+      tags: *a6
+  /api/devoluciones/autorizaciones/{id}/ingreso:
+    patch:
+      operationId: AutorizacionController_ingreso
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IngresoDto"
+      responses:
+        "200":
+          description: ""
+      tags: *a6
+  /api/devoluciones/autorizaciones/{id}/bultos/{numero}/control:
+    post:
+      operationId: AutorizacionController_controlar
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+        - name: numero
+          required: true
+          in: path
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ControlarBultoDto"
+      responses:
+        "201":
+          description: ""
+          content:
+            application/json:
+              schema:
+                type: object
+      tags: *a6
+  /api/devoluciones/autorizaciones/{id}/cierre:
+    patch:
+      operationId: AutorizacionController_cerrar
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CerrarDto"
+      responses:
+        "200":
+          description: ""
+      tags: *a6
+  /api/devoluciones/informes/resumen:
+    get:
+      operationId: InformesController_resumen
+      parameters: []
+      responses:
+        "200":
+          description: ""
+      tags: &a7
+        - Informes
+  /api/devoluciones/informes/por-cliente:
+    get:
+      operationId: InformesController_porCliente
+      parameters: []
+      responses:
+        "200":
+          description: ""
+      tags: *a7
+  /api/devoluciones/informes/serie:
+    get:
+      operationId: InformesController_serie
+      parameters: []
+      responses:
+        "200":
+          description: ""
+      tags: *a7
+  /api/health:
+    get:
+      operationId: HealthController_check
+      parameters: []
+      responses:
+        "200":
+          description: ""
+          content:
+            application/json:
+              schema:
+                type: object
+      tags:
+        - Health
+info:
+  title: WMS Grupal — API
+  description: "API del WMS Grupal. Módulo 1: Devoluciones de libros."
+  version: 0.1.0
+  contact: {}
+tags: []
+servers: []
+components:
+  securitySchemes:
+    bearer:
+      scheme: bearer
+      bearerFormat: JWT
+      type: http
+  schemas:
+    LoginUsuarioDto:
+      type: object
+      properties: {}
+    LoginClienteDto:
+      type: object
+      properties: {}
+    CambiarClaveDto:
+      type: object
+      properties: {}
+    ProductoDto:
+      type: object
+      properties: {}
+    ProductosBulkDto:
+      type: object
+      properties: {}
+    CrearClienteDto:
+      type: object
+      properties: {}
+    EditarClienteDto:
+      type: object
+      properties: {}
+    CrearUsuarioDto:
+      type: object
+      properties: {}
+    EditarUsuarioDto:
+      type: object
+      properties: {}
+    CrearRolDto:
+      type: object
+      properties: {}
+    EditarRolDto:
+      type: object
+      properties: {}
+    CrearAutorizacionDto:
+      type: object
+      properties: {}
+    DeclararDto:
+      type: object
+      properties: {}
+    RecibirDto:
+      type: object
+      properties: {}
+    IngresoDto:
+      type: object
+      properties: {}
+    ControlarBultoDto:
+      type: object
+      properties: {}
+    CerrarDto:
+      type: object
+      properties: {}

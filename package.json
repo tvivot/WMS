@@ -21,6 +21,8 @@
     "migrate": "prisma migrate deploy --schema apps/api/prisma/schema.prisma",
     "migrate:dev": "prisma migrate dev --schema apps/api/prisma/schema.prisma",
     "start": "node apps/api/dist/main.js",
+    "test": "npm run test -w @wms/api",
+    "openapi": "node apps/api/dist/openapi-gen.js",
     "dev:api": "npm run start:dev -w @wms/api",
     "dev:web": "npm run dev -w @wms/web"
   }

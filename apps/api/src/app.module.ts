@@ -1,8 +1,10 @@
 import { join } from 'node:path';
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ServeStaticModule } from '@nestjs/serve-static';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule } from './prisma/prisma.module';
 import { HealthModule } from './health/health.module';
 import { AuthModule } from './core/auth/auth.module';
@@ -18,6 +20,8 @@ import { DevolucionesModule } from './modulos/devoluciones/devoluciones.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     EventEmitterModule.forRoot(),
+    // Rate limiting global (anti fuerza bruta / abuso): 120 req/min por IP.
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
     PrismaModule,
     AuditoriaModule,
     AuthModule,
@@ -36,6 +40,10 @@ import { DevolucionesModule } from './modulos/devoluciones/devoluciones.module';
       rootPath: join(__dirname, 'static'),
       serveStaticOptions: { index: 'index.html' },
     }),
+  ],
+  providers: [
+    // Guard de rate limiting a nivel global.
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule {}
