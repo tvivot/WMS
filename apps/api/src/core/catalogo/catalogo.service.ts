@@ -8,16 +8,10 @@ import { UPLOADS_RUTA_PUBLICA, uploadsDir } from '../storage/uploads';
 import { ProductoDto, ProductoImportDto } from './dto';
 import { convertirAWebp, detectarTipoImagen } from './imagen.util';
 import { normalizarIsbn } from './isbn.util';
+import { enBloques } from '../util/bloques';
 
 /** Subcarpeta (bajo uploads) y prefijo de URL para las portadas de productos. */
 const SUBCARPETA_PRODUCTOS = 'productos';
-
-/** Parte un arreglo en bloques de tamaño n (para batch/chunked queries). */
-function enBloques<T>(arr: T[], n: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
-  return out;
-}
 
 export interface ProductoResuelto {
   id: number;
