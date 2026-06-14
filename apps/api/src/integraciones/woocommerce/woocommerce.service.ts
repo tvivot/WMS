@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Interval } from '@nestjs/schedule';
 import { CatalogoService } from '../../core/catalogo/catalogo.service';
 import { leerWooConfig } from './woocommerce.config';
 import { WooCommerceClient } from './woocommerce.client';
@@ -31,9 +31,12 @@ export class WooCommerceService {
     return leerWooConfig() !== null;
   }
 
-  /** Corrida automática nocturna; no hace nada si WooCommerce no está configurado. */
-  @Cron(CronExpression.EVERY_DAY_AT_3AM)
-  async cronDiario(): Promise<void> {
+  /**
+   * Corrida automática cada 48 h (desde el arranque del proceso) para mantener
+   * las portadas al día. No hace nada si WooCommerce no está configurado.
+   */
+  @Interval('woo-sync-imagenes', 48 * 60 * 60 * 1000)
+  async syncProgramado(): Promise<void> {
     if (!this.estaConfigurado()) return;
     const r = await this.sincronizarImagenes();
     this.logger.log(
