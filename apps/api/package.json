@@ -5,8 +5,8 @@
   "scripts": {
     "build": "nest build",
     "start": "node dist/main.js",
-    "start:dev": "nest start --watch",
-    "start:debug": "nest start --debug --watch",
+    "start:dev": "NODE_ENV=development nest start --watch",
+    "start:debug": "NODE_ENV=development nest start --debug --watch",
     "test": "jest"
   },
   "dependencies": {

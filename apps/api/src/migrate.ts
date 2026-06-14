@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync, readdirSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -95,6 +95,14 @@ export function runMigrationsAsync(): void {
         r.error,
         r.stderr.slice(0, 500),
       );
+      // Liberar el lock: si falló (timeout, lock de DB ajeno, etc.) el próximo
+      // arranque debe poder reintentar este mismo set. Sin esto, una migración
+      // fallida quedaría silenciada hasta que llegue una migración nueva.
+      try {
+        rmdirSync(lock);
+      } catch {
+        /* el lock ya no está: nada que liberar */
+      }
     }
   });
 }

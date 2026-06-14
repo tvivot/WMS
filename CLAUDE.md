@@ -242,6 +242,9 @@ Si una instrucción, decisión o fix ya está acá o en claude-mem, no se vuelve
 ### 6. Respetar los límites de módulo
 Ningún módulo importa internos de otro. Comunicación SOLO por puertos/eventos. Sin FKs duras cruzadas. Un cambio de contrato (puerto/evento) se documenta en `docs/contratos/`. Esta regla es la que mantiene que "tocar un módulo no rompa otro".
 
+### 7. Auto-review con la skill antes de cerrar cualquier cambio sustantivo
+Al terminar una tanda de cambios de código (no triviales), antes de darla por cerrada se corre la skill **`/code-review`** sobre el diff propio — sin esperar a que el usuario lo pida. Compilar y testear NO alcanza: `tsc`+`jest` pescan errores de tipo/lógica, pero no problemas de eficiencia, robustez o altitud (p. ej. un fix que duplica requests HTTP o no cachea una decisión por host). El review ya encontró bugs reales en código recién escrito que la compilación y los tests no veían. Flujo fijo: **diagnóstico/investigación con skills + orquestador (agentes en paralelo) → implementar → `/code-review` del diff → aplicar los hallazgos reales → recién ahí cerrar**. Los hallazgos se filtran con criterio (descartar los "por diseño" o falsos positivos, explicando por qué).
+
 ---
 
 ## Seguridad informática (hardening) — política dura

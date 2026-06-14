@@ -3,6 +3,8 @@
 > **Leer este archivo al iniciar una sesión de trabajo.** Resume qué está construido,
 > cómo funciona el deploy y los errores ya resueltos para NO repetirlos.
 > Las reglas de arquitectura viven en `CLAUDE.md` (raíz); esto es el estado operativo.
+> **Performance / límites de Hostinger (procesos, queries, búsqueda): ver runbook
+> `docs/performance-hostinger.md`** antes de tocar nada de eso.
 
 ## Qué está construido (Módulo 1 COMPLETO y en producción)
 

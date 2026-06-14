@@ -3,6 +3,7 @@ import { Interval } from '@nestjs/schedule';
 import { CatalogoService } from '../../core/catalogo/catalogo.service';
 import { leerWooConfig } from './woocommerce.config';
 import { WooCommerceClient } from './woocommerce.client';
+import { enBloques } from '../../core/util/bloques';
 
 export interface ResultadoSyncImagenes {
   configurado: boolean;
@@ -116,8 +117,8 @@ export class WooCommerceService {
     // CONCURRENCIA productos en paralelo por bloque, sin saturar al servidor
     // de WooCommerce. Los contadores se actualizan en el hilo único de JS.
     const CONCURRENCIA = 8;
-    for (let i = 0; i < productos.length; i += CONCURRENCIA) {
-      await Promise.all(productos.slice(i, i + CONCURRENCIA).map(procesarUno));
+    for (const bloque of enBloques(productos, CONCURRENCIA)) {
+      await Promise.all(bloque.map(procesarUno));
     }
 
     return { configurado: true, revisados: productos.length, actualizados, sinImagen, errores };

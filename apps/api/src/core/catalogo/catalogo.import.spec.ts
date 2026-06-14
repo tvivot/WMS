@@ -131,6 +131,29 @@ describe('CatalogoService.importarProductos', () => {
     expect(prisma._state.productos[0].editorial).toBe('Nueva');
   });
 
+  it('no infla "creados" cuando el código interno ya existía suelto (sin vínculo ISBN)', async () => {
+    const prisma = crearFakePrisma();
+    // Producto preexistente con codigoInterno = ISBN_A pero SIN fila en productoIsbn.
+    prisma._state.productos.push({
+      id: 99,
+      codigoInterno: ISBN_A,
+      titulo: 'Viejo',
+      editorial: null,
+    });
+    const svc = new CatalogoService(prisma);
+
+    const r = await svc.importarProductos([
+      { isbn: ISBN_A, titulo: 'Libro A' }, // ya existe el código → createMany lo saltea
+      { isbn: ISBN_B, titulo: 'Libro B' }, // este sí es alta real
+    ]);
+
+    // Solo ISBN_B es alta real; ISBN_A se cuenta como 0 creados (antes daba 2).
+    expect(r.creados).toBe(1);
+    expect(prisma._state.productos).toHaveLength(2);
+    // El ISBN_A suelto queda igualmente vinculado a su producto preexistente.
+    expect(prisma._state.isbns.map((i) => i.isbn).sort()).toEqual([ISBN_A, ISBN_B].sort());
+  });
+
   it('una fila con ISBN inválido no aborta el lote', async () => {
     const prisma = crearFakePrisma();
     const svc = new CatalogoService(prisma);

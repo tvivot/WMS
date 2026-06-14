@@ -210,10 +210,19 @@ export class CatalogoService {
     const terminos = q
       .trim()
       .split(/\s+/)
-      .map((w) => w.replace(/[+\-><()~*"@]/g, ''))
+      .map((w) => w.replace(/[+\-><()~*"@{}]/g, ''))
       .filter((w) => w.length >= CatalogoService.FT_MIN)
       .map((w) => `+${w}*`);
     return terminos.length ? terminos.join(' ') : null;
+  }
+
+  /**
+   * Escapa los comodines de LIKE (`\` `%` `_`) para que en startsWith/contains
+   * se tomen como literales. Sin esto, buscar `%` genera `LIKE '%%'` y devuelve
+   * toda la tabla (Prisma NO escapa el valor de startsWith/contains en MySQL).
+   */
+  private escaparLike(s: string): string {
+    return s.replace(/[\\%_]/g, '\\$&');
   }
 
   async listar(params: { q?: string; skip?: number; take?: number }) {
@@ -229,14 +238,15 @@ export class CatalogoService {
     let where: Prisma.ProductoWhereInput = {};
     if (q) {
       const ft = this.exprFulltext(q);
+      const qLike = this.escaparLike(q);
       const porTitulo: Prisma.ProductoWhereInput = ft
         ? { titulo: { search: ft } }
-        : { titulo: { contains: q } };
+        : { titulo: { contains: qLike } };
       where = {
         OR: [
           porTitulo,
-          { codigoInterno: { startsWith: q } },
-          { isbns: { some: { isbn: { startsWith: q } } } },
+          { codigoInterno: { startsWith: qLike } },
+          { isbns: { some: { isbn: { startsWith: qLike } } } },
         ],
       };
     }
