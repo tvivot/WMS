@@ -1,0 +1,133 @@
+import { CatalogoService } from './catalogo.service';
+import type { PrismaService } from '../../prisma/prisma.service';
+
+/**
+ * Tests del import masivo del catálogo (integrador) sobre un Prisma fake en
+ * memoria: upsert por ISBN, idempotencia, ISBN inválido no aborta el lote,
+ * código interno derivado del ISBN.
+ */
+
+// ISBNs reales (checksum válido)
+const ISBN_A = '9780306406157';
+const ISBN_B = '9783161484100';
+const ISBN_A_CON_GUIONES = '978-0-306-40615-7'; // mismo que ISBN_A normalizado
+
+interface ProdRow {
+  id: number;
+  codigoInterno: string;
+  titulo: string;
+  editorial: string | null;
+}
+interface IsbnRow {
+  isbn: string;
+  productoId: number;
+}
+
+function crearFakePrisma() {
+  let seq = 1;
+  const productos: ProdRow[] = [];
+  const isbns: IsbnRow[] = [];
+
+  const prisma = {
+    productoIsbn: {
+      findUnique: async ({ where: { isbn } }: { where: { isbn: string } }) =>
+        isbns.find((i) => i.isbn === isbn) ?? null,
+      create: async ({ data }: { data: IsbnRow }) => {
+        if (isbns.some((i) => i.isbn === data.isbn)) {
+          throw new Error('Unique constraint failed: isbn');
+        }
+        isbns.push({ ...data });
+        return data;
+      },
+    },
+    producto: {
+      update: async ({
+        where: { id },
+        data,
+      }: {
+        where: { id: number };
+        data: Partial<ProdRow>;
+      }) => {
+        const p = productos.find((x) => x.id === id);
+        if (!p) throw new Error('Record not found');
+        Object.assign(p, data);
+        return p;
+      },
+      upsert: async ({
+        where: { codigoInterno },
+        create,
+        update,
+      }: {
+        where: { codigoInterno: string };
+        create: Omit<ProdRow, 'id'>;
+        update: Partial<ProdRow>;
+      }) => {
+        const existing = productos.find((x) => x.codigoInterno === codigoInterno);
+        if (existing) {
+          Object.assign(existing, update);
+          return existing;
+        }
+        const row: ProdRow = { id: seq++, ...create };
+        productos.push(row);
+        return row;
+      },
+    },
+    _state: { productos, isbns },
+  };
+  return prisma as unknown as PrismaService & {
+    _state: { productos: ProdRow[]; isbns: IsbnRow[] };
+  };
+}
+
+describe('CatalogoService.importarProductos', () => {
+  it('crea productos nuevos usando el ISBN como código interno', async () => {
+    const prisma = crearFakePrisma();
+    const svc = new CatalogoService(prisma);
+
+    const r = await svc.importarProductos([
+      { isbn: ISBN_A, titulo: 'Libro A', editorial: 'Edit A' },
+      { isbn: ISBN_B, titulo: 'Libro B' },
+    ]);
+
+    expect(r).toEqual({ recibidos: 2, creados: 2, actualizados: 0, errores: [] });
+    expect(prisma._state.productos).toHaveLength(2);
+    expect(prisma._state.productos[0].codigoInterno).toBe(ISBN_A);
+    expect(prisma._state.productos[0].editorial).toBe('Edit A');
+    expect(prisma._state.productos[1].editorial).toBeNull();
+    expect(prisma._state.isbns.map((i) => i.isbn).sort()).toEqual(
+      [ISBN_A, ISBN_B].sort(),
+    );
+  });
+
+  it('es idempotente: reenviar el mismo lote actualiza, no duplica', async () => {
+    const prisma = crearFakePrisma();
+    const svc = new CatalogoService(prisma);
+
+    await svc.importarProductos([{ isbn: ISBN_A, titulo: 'Libro A' }]);
+    const r = await svc.importarProductos([
+      { isbn: ISBN_A_CON_GUIONES, titulo: 'Libro A (corregido)', editorial: 'Nueva' },
+    ]);
+
+    expect(r).toEqual({ recibidos: 1, creados: 0, actualizados: 1, errores: [] });
+    expect(prisma._state.productos).toHaveLength(1);
+    expect(prisma._state.isbns).toHaveLength(1);
+    expect(prisma._state.productos[0].titulo).toBe('Libro A (corregido)');
+    expect(prisma._state.productos[0].editorial).toBe('Nueva');
+  });
+
+  it('una fila con ISBN inválido no aborta el lote', async () => {
+    const prisma = crearFakePrisma();
+    const svc = new CatalogoService(prisma);
+
+    const r = await svc.importarProductos([
+      { isbn: ISBN_A, titulo: 'Libro A' },
+      { isbn: '123', titulo: 'Basura' },
+      { isbn: ISBN_B, titulo: 'Libro B' },
+    ]);
+
+    expect(r.recibidos).toBe(3);
+    expect(r.creados).toBe(2);
+    expect(r.errores).toEqual([{ isbn: '123', error: 'ISBN inválido' }]);
+    expect(prisma._state.productos).toHaveLength(2);
+  });
+});

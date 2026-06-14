@@ -162,6 +162,20 @@ paths:
         "201":
           description: ""
       tags: *a2
+  /api/catalogo/productos/import:
+    post:
+      operationId: CatalogoController_importar
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductosImportarDto"
+      responses:
+        "201":
+          description: ""
+      tags: *a2
   /api/clientes:
     get:
       operationId: ClientesController_listar
@@ -738,6 +752,9 @@ components:
       type: object
       properties: {}
     ProductosBulkDto:
+      type: object
+      properties: {}
+    ProductosImportarDto:
       type: object
       properties: {}
     CrearClienteDto:

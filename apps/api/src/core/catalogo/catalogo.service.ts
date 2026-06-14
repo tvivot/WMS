@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { ProductoDto } from './dto';
+import { ProductoDto, ProductoImportDto } from './dto';
 import { normalizarIsbn } from './isbn.util';
 
 export interface ProductoResuelto {
@@ -33,10 +33,19 @@ export class CatalogoService {
   async upsertProducto(dto: ProductoDto): Promise<{ id: number; isbnsInvalidos: string[] }> {
     const { validos, invalidos } = this.normalizarIsbns(dto.isbns);
 
+    // El código interno es opcional: si no viene, se usa el primer ISBN válido
+    // (el ISBN actúa como identificador maestro). Sin código ni ISBN no hay alta.
+    const codigoInterno = dto.codigoInterno?.trim() || validos[0];
+    if (!codigoInterno) {
+      throw new BadRequestException(
+        'Se requiere código interno o al menos un ISBN válido',
+      );
+    }
+
     const producto = await this.prisma.producto.upsert({
-      where: { codigoInterno: dto.codigoInterno },
+      where: { codigoInterno },
       create: {
-        codigoInterno: dto.codigoInterno,
+        codigoInterno,
         titulo: dto.titulo,
         editorial: dto.editorial ?? null,
         autor: dto.autor ?? null,
@@ -81,8 +90,68 @@ export class CatalogoService {
     return { procesados, isbnsInvalidos };
   }
 
+  /**
+   * Importación masiva desde el sistema externo (integrador): catálogo
+   * simplificado ISBN + Título + Editorial. Upsert por ISBN (clave de
+   * identidad = código interno). Idempotente: reenviar el mismo lote produce
+   * el mismo resultado. Una fila con ISBN inválido no aborta el lote: se
+   * informa en `errores`. Ver docs/integraciones/manual-api-catalogo.md.
+   */
+  async importarProductos(items: ProductoImportDto[]): Promise<{
+    recibidos: number;
+    creados: number;
+    actualizados: number;
+    errores: { isbn: string; error: string }[];
+  }> {
+    let creados = 0;
+    let actualizados = 0;
+    const errores: { isbn: string; error: string }[] = [];
+
+    for (const item of items) {
+      const isbn = normalizarIsbn(item.isbn);
+      if (!isbn) {
+        errores.push({ isbn: item.isbn, error: 'ISBN inválido' });
+        continue;
+      }
+      try {
+        // La identidad es el ISBN: si ya está catalogado, se actualiza ese
+        // producto; si no, se crea uno nuevo con código interno = ISBN.
+        const existente = await this.prisma.productoIsbn.findUnique({
+          where: { isbn },
+          select: { productoId: true },
+        });
+        if (existente) {
+          await this.prisma.producto.update({
+            where: { id: existente.productoId },
+            data: { titulo: item.titulo, editorial: item.editorial ?? null },
+          });
+          actualizados++;
+        } else {
+          // ISBN no catalogado: crea (o reusa) el producto con código = ISBN
+          // y lo vincula. upsert evita chocar si el código ya existiera suelto.
+          const producto = await this.prisma.producto.upsert({
+            where: { codigoInterno: isbn },
+            create: {
+              codigoInterno: isbn,
+              titulo: item.titulo,
+              editorial: item.editorial ?? null,
+            },
+            update: { titulo: item.titulo, editorial: item.editorial ?? null },
+          });
+          await this.prisma.productoIsbn.create({
+            data: { isbn, productoId: producto.id },
+          });
+          creados++;
+        }
+      } catch (err) {
+        errores.push({ isbn, error: (err as Error).message.slice(0, 200) });
+      }
+    }
+    return { recibidos: items.length, creados, actualizados, errores };
+  }
+
   async listar(params: { q?: string; skip?: number; take?: number }) {
-    const take = Math.min(params.take ?? 50, 200);
+    const take = Math.min(params.take ?? 50, 500);
     const skip = params.skip ?? 0;
     const where = params.q
       ? {

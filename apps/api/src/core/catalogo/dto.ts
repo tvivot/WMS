@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsBoolean,
   IsInt,
@@ -13,10 +14,15 @@ import {
 } from 'class-validator';
 
 export class ProductoDto {
+  /**
+   * Identificador maestro del producto. Opcional: si no se envía, el catálogo
+   * lo deriva del primer ISBN válido (el ISBN actúa como código interno).
+   */
+  @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(60)
-  codigoInterno!: string;
+  codigoInterno?: string;
 
   @IsString()
   @MinLength(1)
@@ -65,4 +71,35 @@ export class ProductosBulkDto {
   @ValidateNested({ each: true })
   @Type(() => ProductoDto)
   productos!: ProductoDto[];
+}
+
+/**
+ * Línea de importación masiva desde el sistema externo (integrador).
+ * Catálogo simplificado: ISBN + Título + Editorial. El ISBN es la clave de
+ * identidad (actúa como código interno). Ver docs/integraciones/manual-api-catalogo.md.
+ */
+export class ProductoImportDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(20)
+  isbn!: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(300)
+  titulo!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  editorial?: string;
+}
+
+export class ProductosImportarDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(1000)
+  @ValidateNested({ each: true })
+  @Type(() => ProductoImportDto)
+  productos!: ProductoImportDto[];
 }

@@ -11,7 +11,7 @@ import {
 import { RequierePermiso } from '../auth/decoradores';
 import { PERMISOS } from '../auth/permisos';
 import { CatalogoService } from './catalogo.service';
-import { ProductoDto, ProductosBulkDto } from './dto';
+import { ProductoDto, ProductosBulkDto, ProductosImportarDto } from './dto';
 
 @Controller('catalogo/productos')
 export class CatalogoController {
@@ -60,5 +60,16 @@ export class CatalogoController {
   @Post('bulk')
   bulk(@Body() dto: ProductosBulkDto) {
     return this.catalogo.bulkUpsert(dto.productos);
+  }
+
+  /**
+   * Importación masiva desde el sistema externo (integrador).
+   * Catálogo simplificado ISBN + Título + Editorial; upsert por ISBN; máx. 1000
+   * por request. Ver docs/integraciones/manual-api-catalogo.md
+   */
+  @RequierePermiso(PERMISOS.CATALOGO_ADMINISTRAR)
+  @Post('import')
+  importar(@Body() dto: ProductosImportarDto) {
+    return this.catalogo.importarProductos(dto.productos);
   }
 }

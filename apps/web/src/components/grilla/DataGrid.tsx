@@ -2,25 +2,54 @@ import { useEffect, useRef, useState } from 'react';
 import {
   flexRender,
   getCoreRowModel,
+  getFilteredRowModel,
+  getPaginationRowModel,
   getSortedRowModel,
   useReactTable,
   type ColumnDef,
+  type PaginationState,
   type SortingState,
   type VisibilityState,
 } from '@tanstack/react-table';
-import { ArrowDown, ArrowUp, ArrowUpDown, Columns3 } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Columns3,
+  Search,
+  X,
+} from 'lucide-react';
+
+const TAMANOS_PAGINA = [20, 50, 100];
 
 /**
- * Grilla reusable (TanStack Table v8): orden por cualquier columna y
- * mostrar/ocultar columnas, con preferencia persistida por grilla
- * (storageKey) en localStorage.
+ * Grilla reusable (TanStack Table v8): orden por cualquier columna,
+ * mostrar/ocultar columnas (preferencia persistida por grilla en
+ * localStorage vía storageKey), paginación (20/50/100, tamaño persistido
+ * por grilla) y, si se pasa `buscar`, filtro de texto global sobre todas
+ * las columnas.
  */
-export function DataGrid<T>({ data, columns, storageKey }: {
+export function DataGrid<T>({ data, columns, storageKey, buscar }: {
   data: T[];
   columns: ColumnDef<T, unknown>[];
   storageKey?: string;
+  /** Habilita el buscador de texto global. Texto = placeholder del input. */
+  buscar?: string;
 }) {
   const [sorting, setSorting] = useState<SortingState>([]);
+  const [globalFilter, setGlobalFilter] = useState('');
+  const [pagination, setPagination] = useState<PaginationState>(() => {
+    let pageSize = 20;
+    if (storageKey) {
+      const guardado = Number(localStorage.getItem(`grilla_${storageKey}_size`));
+      if (TAMANOS_PAGINA.includes(guardado)) pageSize = guardado;
+    }
+    return { pageIndex: 0, pageSize };
+  });
   const [visibility, setVisibility] = useState<VisibilityState>(() => {
     if (!storageKey) return {};
     try {
@@ -37,6 +66,10 @@ export function DataGrid<T>({ data, columns, storageKey }: {
   }, [visibility, storageKey]);
 
   useEffect(() => {
+    if (storageKey) localStorage.setItem(`grilla_${storageKey}_size`, String(pagination.pageSize));
+  }, [pagination.pageSize, storageKey]);
+
+  useEffect(() => {
     if (!menuAbierto) return;
     const cerrar = (e: MouseEvent) => {
       if (!menuRef.current?.contains(e.target as Node)) setMenuAbierto(false);
@@ -48,16 +81,53 @@ export function DataGrid<T>({ data, columns, storageKey }: {
   const table = useReactTable({
     data,
     columns,
-    state: { sorting, columnVisibility: visibility },
+    state: { sorting, columnVisibility: visibility, globalFilter, pagination },
     onSortingChange: setSorting,
     onColumnVisibilityChange: setVisibility,
+    onGlobalFilterChange: setGlobalFilter,
+    onPaginationChange: setPagination,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
+
+  // Si el filtro deja menos páginas que la actual, volver a una válida.
+  useEffect(() => {
+    const ultima = Math.max(0, table.getPageCount() - 1);
+    if (pagination.pageIndex > ultima) {
+      setPagination((p) => ({ ...p, pageIndex: ultima }));
+    }
+  }, [table, pagination.pageIndex, globalFilter]);
+
+  const totalFilas = table.getFilteredRowModel().rows.length;
+  const desde = totalFilas === 0 ? 0 : pagination.pageIndex * pagination.pageSize + 1;
+  const hasta = Math.min((pagination.pageIndex + 1) * pagination.pageSize, totalFilas);
 
   return (
     <div className="card overflow-visible">
-      <div className="flex justify-end px-2 pt-2">
+      <div className="flex items-center gap-2 px-2 pt-2">
+        {buscar !== undefined && (
+          <div className="relative flex-1 max-w-xs">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+            <input
+              className="input h-8 pl-8 pr-8 text-sm"
+              placeholder={buscar || 'Buscar…'}
+              value={globalFilter}
+              onChange={(e) => setGlobalFilter(e.target.value)}
+            />
+            {globalFilter && (
+              <button
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                onClick={() => setGlobalFilter('')}
+                title="Limpiar búsqueda"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        )}
+        <div className="flex justify-end ml-auto">
         <div className="relative" ref={menuRef}>
           <button
             className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-800 px-2 h-8 rounded-lg hover:bg-slate-100"
@@ -81,6 +151,7 @@ export function DataGrid<T>({ data, columns, storageKey }: {
               ))}
             </div>
           )}
+        </div>
         </div>
       </div>
       <div className="overflow-x-auto">
@@ -120,6 +191,64 @@ export function DataGrid<T>({ data, columns, storageKey }: {
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2.5 border-t border-slate-100 text-sm text-slate-500">
+        <div className="flex items-center gap-2">
+          <span>Filas por página</span>
+          <select
+            className="input h-8 w-20 text-sm py-0"
+            value={pagination.pageSize}
+            onChange={(e) => table.setPageSize(Number(e.target.value))}
+          >
+            {TAMANOS_PAGINA.map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <span className="tabnum">
+            {desde}–{hasta} de {totalFilas}
+          </span>
+          <div className="flex items-center gap-0.5">
+            <button
+              className="btn-ghost h-8 px-2 disabled:opacity-40 disabled:cursor-not-allowed"
+              onClick={() => table.setPageIndex(0)}
+              disabled={!table.getCanPreviousPage()}
+              title="Primera página"
+            >
+              <ChevronsLeft className="h-4 w-4" />
+            </button>
+            <button
+              className="btn-ghost h-8 px-2 disabled:opacity-40 disabled:cursor-not-allowed"
+              onClick={() => table.previousPage()}
+              disabled={!table.getCanPreviousPage()}
+              title="Página anterior"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <span className="px-2 tabnum">
+              {table.getPageCount() === 0 ? 0 : pagination.pageIndex + 1} / {table.getPageCount()}
+            </span>
+            <button
+              className="btn-ghost h-8 px-2 disabled:opacity-40 disabled:cursor-not-allowed"
+              onClick={() => table.nextPage()}
+              disabled={!table.getCanNextPage()}
+              title="Página siguiente"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+            <button
+              className="btn-ghost h-8 px-2 disabled:opacity-40 disabled:cursor-not-allowed"
+              onClick={() => table.setPageIndex(table.getPageCount() - 1)}
+              disabled={!table.getCanNextPage()}
+              title="Última página"
+            >
+              <ChevronsRight className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

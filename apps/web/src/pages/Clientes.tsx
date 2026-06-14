@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { KeyRound, Plus } from 'lucide-react';
+import type { ColumnDef } from '@tanstack/react-table';
 import { api } from '../lib/api';
 import { Card, ClaveDialog, CredencialAlert, EmptyState, Field, Spinner } from '../components/ui';
+import { DataGrid } from '../components/grilla/DataGrid';
 
 interface Cliente {
   id: number;
@@ -62,6 +64,61 @@ export function Clientes() {
     }
   };
 
+  const columnas = useMemo<ColumnDef<Cliente, unknown>[]>(
+    () => [
+      {
+        id: 'nro',
+        header: 'Nro',
+        accessorKey: 'nroCliente',
+        cell: ({ row }) => <span className="font-medium tabnum">{row.original.nroCliente}</span>,
+      },
+      { id: 'nombre', header: 'Nombre', accessorKey: 'nombre' },
+      {
+        id: 'direccion',
+        header: 'Dirección',
+        accessorFn: (c) => c.direccion ?? '',
+        cell: ({ row }) => <span className="text-slate-500">{row.original.direccion ?? '—'}</span>,
+      },
+      {
+        id: 'estado',
+        header: 'Estado',
+        accessorFn: (c) => (c.activo ? 'Activo' : 'Inactivo'),
+        cell: ({ row }) => {
+          const c = row.original;
+          return (
+            <button
+              onClick={() => toggleActivo(c)}
+              title={c.activo ? 'Clic para desactivar (deja de verse en el WMS)' : 'Clic para reactivar'}
+              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 h-7 text-xs font-semibold cursor-pointer transition-colors ${
+                c.activo
+                  ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+              }`}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${c.activo ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+              {c.activo ? 'Activo' : 'Inactivo'}
+              {c.primerIngreso && c.activo ? ' · 1er ingreso' : ''}
+            </button>
+          );
+        },
+      },
+      {
+        id: 'accion',
+        header: '',
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div className="text-right">
+            <button className="btn-ghost h-9" onClick={() => setReseteando(row.original)} title="Asignar nueva clave">
+              <KeyRound className="h-4 w-4" /> Clave
+            </button>
+          </div>
+        ),
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
@@ -102,42 +159,7 @@ export function Clientes() {
       ) : items.length === 0 ? (
         <EmptyState titulo="Sin clientes" />
       ) : (
-        <div className="card overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-500 text-left">
-              <tr><th className="px-4 py-3 font-medium">Nro</th><th className="px-4 py-3 font-medium">Nombre</th><th className="px-4 py-3 font-medium">Dirección</th><th className="px-4 py-3 font-medium">Estado</th><th className="px-4 py-3"></th></tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {items.map((c) => (
-                <tr key={c.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-medium tabnum">{c.nroCliente}</td>
-                  <td className="px-4 py-3">{c.nombre}</td>
-                  <td className="px-4 py-3 text-slate-500">{c.direccion ?? '—'}</td>
-                  <td className="px-4 py-3">
-                    <button
-                      onClick={() => toggleActivo(c)}
-                      title={c.activo ? 'Clic para desactivar (deja de verse en el WMS)' : 'Clic para reactivar'}
-                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 h-7 text-xs font-semibold cursor-pointer transition-colors ${
-                        c.activo
-                          ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                          : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-                      }`}
-                    >
-                      <span className={`h-1.5 w-1.5 rounded-full ${c.activo ? 'bg-emerald-500' : 'bg-slate-400'}`} />
-                      {c.activo ? 'Activo' : 'Inactivo'}
-                      {c.primerIngreso && c.activo ? ' · 1er ingreso' : ''}
-                    </button>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button className="btn-ghost h-9" onClick={() => setReseteando(c)} title="Asignar nueva clave">
-                      <KeyRound className="h-4 w-4" /> Clave
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataGrid data={items} columns={columnas} storageKey="clientes" buscar="Buscar por número o nombre…" />
       )}
 
       {reseteando && (
