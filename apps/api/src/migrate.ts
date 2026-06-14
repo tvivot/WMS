@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { mkdirSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 export interface ResultadoMigracion {
@@ -45,12 +47,40 @@ export function ejecutarMigraciones(): Promise<ResultadoMigracion> {
   });
 }
 
+/** Nombre de la última migración (carpeta) para usar como clave del lock. */
+function ultimaMigracion(): string {
+  try {
+    const dir = join(__dirname, '..', 'prisma', 'migrations');
+    const carpetas = readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort();
+    return carpetas[carpetas.length - 1] ?? 'none';
+  } catch {
+    return 'none';
+  }
+}
+
 /**
  * Variante fire-and-forget para el arranque: la app YA está escuchando
  * (Hostinger exige bind rápido del puerto); esto corre en segundo plano y
  * solo loguea. Para ver el resultado con detalle: POST /api/admin/migraciones.
+ *
+ * CRÍTICO (Hostinger/Passenger): cada worker corre main.ts y antes spawneaba un
+ * `prisma migrate deploy` propio (CLI + engine, con pools de threads del tamaño
+ * de los cores del SERVIDOR FÍSICO). Al escalar workers eso disparaba una
+ * tormenta de procesos contra el límite nproc. Lock atómico por SET de
+ * migraciones (mkdir falla si ya existe): solo el PRIMER worker que ve un set
+ * nuevo dispara la migración; el resto la saltea. Si un redeploy trae una
+ * migración nueva, cambia el nombre del lock y vuelve a correr una sola vez.
  */
 export function runMigrationsAsync(): void {
+  const lock = join(tmpdir(), `wms-migrate-${ultimaMigracion()}.lock`);
+  try {
+    mkdirSync(lock); // atómico entre procesos: lanza EEXIST si ya existe
+  } catch {
+    return; // otro worker ya está/estuvo a cargo de migrar este set
+  }
   void ejecutarMigraciones().then((r) => {
     if (r.ok) {
       // eslint-disable-next-line no-console
