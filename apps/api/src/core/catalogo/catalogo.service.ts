@@ -168,7 +168,7 @@ export class CatalogoService {
     const nuevos = unicos.filter((v) => !productoPorIsbn.has(v.isbn));
     let creados = 0;
     for (const bloque of enBloques(nuevos, 500)) {
-      await this.prisma.producto.createMany({
+      const alta = await this.prisma.producto.createMany({
         data: bloque.map((v) => ({
           codigoInterno: v.isbn,
           titulo: v.titulo,
@@ -187,7 +187,10 @@ export class CatalogoService {
           .filter((d): d is { isbn: string; productoId: number } => d.productoId !== undefined),
         skipDuplicates: true,
       });
-      creados += bloque.length;
+      // createMany con skipDuplicates puede saltear un codigoInterno que ya
+      // existía suelto: contar las altas REALES (alta.count), no el tamaño del
+      // bloque, para no inflar "creados".
+      creados += alta.count;
     }
 
     return { recibidos: items.length, creados, actualizados, errores };

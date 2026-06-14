@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PasswordService } from '../seguridad/password.service';
 import { generarClave } from '../seguridad/clave.util';
 import { ClienteImportDto, CrearClienteDto, EditarClienteDto } from './dto';
+import { enBloques } from '../util/bloques';
 
 const PUBLICO = {
   id: true, nroCliente: true, nombre: true, direccion: true, activo: true,

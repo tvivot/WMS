@@ -11,28 +11,37 @@ export class WooCommerceClient {
     return 'Basic ' + Buffer.from(`${this.cfg.key}:${this.cfg.secret}`).toString('base64');
   }
 
+  /** Arma la URL de consulta; con `credsEnUrl` agrega key/secret al query string. */
+  private urlProductos(sku: string, credsEnUrl: boolean): string {
+    const params = new URLSearchParams({ sku, _fields: 'id,sku,images', per_page: '1' });
+    if (credsEnUrl) {
+      params.set('consumer_key', this.cfg.key);
+      params.set('consumer_secret', this.cfg.secret);
+    }
+    return `${this.cfg.url}/wp-json/wc/v3/products?${params.toString()}`;
+  }
+
   /**
    * Devuelve la URL de la primera imagen del producto cuyo SKU coincide, o null
    * si no hay producto con ese SKU o no tiene imagen. Lanza si la API falla.
+   *
+   * Autenticación en dos pasos para no filtrar las credenciales en logs: primero
+   * intenta SOLO con el header Basic (las claves no viajan en la URL). Si el
+   * servidor stripea el header Authorization (típico en hosting WordPress
+   * compartido) y responde 401, reintenta con las credenciales en el query
+   * string — método soportado por WooCommerce sobre HTTPS.
    */
   async imagenPorSku(sku: string): Promise<string | null> {
-    const params = new URLSearchParams({
-      sku,
-      _fields: 'id,sku,images',
-      per_page: '1',
-      // Credenciales también por query string: muchos hostings compartidos de
-      // WordPress NO reenvían el header Authorization a PHP, y WooCommerce
-      // responde 401 "woocommerce_rest_cannot_view". Sobre HTTPS este es el
-      // método de autenticación soportado por WooCommerce. Se mantiene además
-      // el header Basic como respaldo para servidores que sí lo propagan.
-      consumer_key: this.cfg.key,
-      consumer_secret: this.cfg.secret,
-    });
-    const url = `${this.cfg.url}/wp-json/wc/v3/products?${params.toString()}`;
-    const res = await fetch(url, {
+    let res = await fetch(this.urlProductos(sku, false), {
       headers: { Authorization: this.auth(), Accept: 'application/json' },
       signal: AbortSignal.timeout(15_000),
     });
+    if (res.status === 401) {
+      res = await fetch(this.urlProductos(sku, true), {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(15_000),
+      });
+    }
     if (!res.ok) {
       // El cuerpo de WooCommerce trae el motivo real (p. ej. code
       // "woocommerce_rest_authentication_error" / "Consumer key is invalid").
