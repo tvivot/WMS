@@ -17,13 +17,6 @@ const PUBLICO = {
  */
 const SIN_CLAVE = 'sin-clave';
 
-/** Parte un arreglo en bloques de tamaño n (para batch/chunked queries). */
-function enBloques<T>(arr: T[], n: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
-  return out;
-}
-
 @Injectable()
 export class ClientesService {
   constructor(
