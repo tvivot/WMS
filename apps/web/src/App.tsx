@@ -7,6 +7,7 @@ import { Clientes } from './pages/Clientes';
 import { Transportistas } from './pages/Transportistas';
 import { Usuarios } from './pages/Usuarios';
 import { Roles } from './pages/Roles';
+import { Configuracion } from './pages/Configuracion';
 import { Informes } from './pages/Informes';
 import { DevolucionesLista } from './pages/devoluciones/Lista';
 import { DevolucionDetalle } from './pages/devoluciones/Detalle';
@@ -45,6 +46,7 @@ export default function App() {
             <Route path="/transportistas" element={<Transportistas />} />
             <Route path="/usuarios" element={<Usuarios />} />
             <Route path="/roles" element={<Roles />} />
+            <Route path="/configuracion" element={<Configuracion />} />
           </Route>
           <Route path="*" element={<Navigate to="/devoluciones" replace />} />
         </Routes>

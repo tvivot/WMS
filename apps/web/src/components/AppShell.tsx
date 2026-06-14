@@ -8,6 +8,7 @@ import {
   LogOut,
   Menu,
   PackageCheck,
+  Settings,
   Shield,
   Truck,
   Users,
@@ -33,6 +34,7 @@ const ITEMS: NavItem[] = [
   { to: '/transportistas', label: 'Transportistas', icon: Truck, permiso: PERMISOS.TRANSPORTISTA_ADMINISTRAR },
   { to: '/usuarios', label: 'Usuarios', icon: Users, permiso: PERMISOS.USUARIO_ADMINISTRAR },
   { to: '/roles', label: 'Roles', icon: Shield, permiso: PERMISOS.ROL_ADMINISTRAR },
+  { to: '/configuracion', label: 'Configuración', icon: Settings, permiso: PERMISOS.CATALOGO_ADMINISTRAR },
 ];
 
 export function AppShell() {
