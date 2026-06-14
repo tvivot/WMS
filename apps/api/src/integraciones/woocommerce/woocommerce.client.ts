@@ -24,7 +24,16 @@ export class WooCommerceClient {
       signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) {
-      throw new Error(`WooCommerce HTTP ${res.status}`);
+      // El cuerpo de WooCommerce trae el motivo real (p. ej. code
+      // "woocommerce_rest_authentication_error" / "Consumer key is invalid").
+      let detalle = '';
+      try {
+        const cuerpo = (await res.json()) as { code?: string; message?: string };
+        detalle = [cuerpo.code, cuerpo.message].filter(Boolean).join(': ');
+      } catch {
+        detalle = (await res.text().catch(() => '')).slice(0, 120);
+      }
+      throw new Error(`WooCommerce HTTP ${res.status}${detalle ? ` — ${detalle}` : ''}`);
     }
     const data = (await res.json()) as Array<{ images?: { src?: string }[] }>;
     const producto = Array.isArray(data) ? data[0] : undefined;

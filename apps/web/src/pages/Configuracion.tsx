@@ -131,6 +131,20 @@ export function Configuracion() {
                 <CheckCircle2 className="h-4 w-4" /> No hay productos pendientes de portada.
               </p>
             )}
+
+            {resultado && resultado.errores.length > 0 && (
+              <div className="mt-3 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm">
+                <p className="text-red-800 font-medium">Detalle de errores</p>
+                <ul className="mt-1.5 space-y-1 max-h-40 overflow-auto">
+                  {agruparErrores(resultado.errores).map((e) => (
+                    <li key={e.mensaje} className="text-red-700 text-xs">
+                      <span className="font-mono">{e.mensaje}</span>
+                      {e.veces > 1 && <span className="text-red-500"> · ×{e.veces}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         </div>
       </Card>
@@ -149,6 +163,15 @@ function EstadoChip({ estado }: { estado: EstadoWoo | null }) {
       <span className="h-1.5 w-1.5 rounded-full bg-slate-400" /> No configurado
     </span>
   );
+}
+
+/** Agrupa los errores por mensaje para no listar 200 líneas iguales. */
+function agruparErrores(errores: { error: string }[]): { mensaje: string; veces: number }[] {
+  const mapa = new Map<string, number>();
+  for (const e of errores) mapa.set(e.error, (mapa.get(e.error) ?? 0) + 1);
+  return [...mapa.entries()]
+    .map(([mensaje, veces]) => ({ mensaje, veces }))
+    .sort((a, b) => b.veces - a.veces);
 }
 
 function VarFila({ nombre, ok }: { nombre: string; ok: boolean }) {
