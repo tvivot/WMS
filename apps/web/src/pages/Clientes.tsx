@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { KeyRound, Plus } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, KeyRound, Plus, Search, X } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { api } from '../lib/api';
 import { Card, ClaveDialog, CredencialAlert, EmptyState, Field, Spinner } from '../components/ui';
@@ -14,19 +14,53 @@ interface Cliente {
   primerIngreso: boolean;
 }
 
+const PAGINA = 50;
+
 export function Clientes() {
   const [items, setItems] = useState<Cliente[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [q, setQ] = useState('');
+  const [page, setPage] = useState(0);
   const [creando, setCreando] = useState(false);
   const [form, setForm] = useState({ nroCliente: '', nombre: '', direccion: '', clave: '' });
   const [cred, setCred] = useState<{ titulo: string; clave: string } | null>(null);
   const [reseteando, setReseteando] = useState<Cliente | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const debounce = useRef<ReturnType<typeof setTimeout>>();
 
-  const cargar = () => {
+  // Búsqueda y paginación SERVER-SIDE: una página por request, filtrada por la
+  // API. Antes se bajaban hasta 2000 clientes y se filtraba en el navegador, así
+  // que un cliente más allá del tope no aparecía ni buscándolo por nº o nombre.
+  const cargar = async (busqueda: string, pag: number) => {
     setItems(null);
-    api.get<Cliente[]>('/clientes').then(setItems).catch(() => setItems([]));
+    try {
+      const qs = busqueda.trim() ? `&q=${encodeURIComponent(busqueda.trim())}` : '';
+      const r = await api.get<{ total: number; items: Cliente[] }>(
+        `/clientes?skip=${pag * PAGINA}&take=${PAGINA}${qs}`,
+      );
+      setItems(r.items);
+      setTotal(r.total);
+    } catch {
+      setItems([]);
+      setTotal(0);
+    }
   };
-  useEffect(cargar, []);
+
+  // Debounce de la búsqueda: vuelve a página 0 y consulta tras 300ms sin tipear.
+  useEffect(() => {
+    clearTimeout(debounce.current);
+    debounce.current = setTimeout(() => {
+      setPage(0);
+      void cargar(q, 0);
+    }, 300);
+    return () => clearTimeout(debounce.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q]);
+
+  const irAPagina = (n: number) => {
+    setPage(n);
+    void cargar(q, n);
+  };
 
   const crear = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,7 +75,7 @@ export function Clientes() {
       setCred({ titulo: `Cliente ${r.nroCliente} — clave de acceso`, clave: r.claveGenerada });
       setForm({ nroCliente: '', nombre: '', direccion: '', clave: '' });
       setCreando(false);
-      cargar();
+      void cargar(q, page);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -51,14 +85,14 @@ export function Clientes() {
     const r = await api.post<{ claveGenerada: string }>(`/clientes/${c.id}/reset-clave`, clave ? { clave } : {});
     setCred({ titulo: `Nueva clave de ${c.nroCliente}`, clave: r.claveGenerada });
     setReseteando(null);
-    cargar();
+    void cargar(q, page);
   };
 
   const toggleActivo = async (c: Cliente) => {
     setError(null);
     try {
       await api.put(`/clientes/${c.id}`, { activo: !c.activo });
-      cargar();
+      void cargar(q, page);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -119,13 +153,40 @@ export function Clientes() {
     [],
   );
 
+  const totalPaginas = Math.max(1, Math.ceil(total / PAGINA));
+  const desde = total === 0 ? 0 : page * PAGINA + 1;
+  const hasta = Math.min((page + 1) * PAGINA, total);
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">Clientes</h1>
+        <h1 className="text-xl font-bold">
+          Clientes{' '}
+          <span className="text-slate-400 text-base font-normal tabnum">({total})</span>
+        </h1>
         <button className="btn-primary" onClick={() => setCreando((v) => !v)}>
           <Plus className="h-4 w-4" /> Cliente
         </button>
+      </div>
+
+      {/* Buscador server-side: nº de cliente (por prefijo) o nombre. */}
+      <div className="relative max-w-md">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+        <input
+          className="input pl-9 pr-9"
+          placeholder="Buscar por número o nombre…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        {q && (
+          <button
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+            onClick={() => setQ('')}
+            title="Limpiar búsqueda"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       {cred && <CredencialAlert titulo={cred.titulo} clave={cred.clave} onCerrar={() => setCred(null)} />}
@@ -157,9 +218,33 @@ export function Clientes() {
       {items === null ? (
         <div className="py-12 text-center"><Spinner className="text-slate-400" /></div>
       ) : items.length === 0 ? (
-        <EmptyState titulo="Sin clientes" />
+        <EmptyState titulo="Sin clientes" sub={q ? 'Probá con otra búsqueda.' : 'Cargá clientes para empezar.'} />
       ) : (
-        <DataGrid data={items} columns={columnas} storageKey="clientes" buscar="Buscar por número o nombre…" />
+        <>
+          <DataGrid data={items} columns={columnas} storageKey="clientes" paginar={false} />
+          <div className="flex items-center justify-between text-sm text-slate-500">
+            <span className="tabnum">
+              {desde}–{hasta} de {total}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                className="btn-ghost h-9 disabled:opacity-40"
+                onClick={() => irAPagina(page - 1)}
+                disabled={page <= 0}
+              >
+                <ChevronLeft className="h-4 w-4" /> Anterior
+              </button>
+              <span className="tabnum">{page + 1} / {totalPaginas}</span>
+              <button
+                className="btn-ghost h-9 disabled:opacity-40"
+                onClick={() => irAPagina(page + 1)}
+                disabled={page + 1 >= totalPaginas}
+              >
+                Siguiente <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </>
       )}
 
       {reseteando && (

@@ -25,20 +25,36 @@ export class ClientesService {
     private readonly password: PasswordService,
   ) {}
 
-  async listar(q?: string) {
+  /**
+   * Listado paginado y filtrado SERVER-SIDE (antes se bajaba todo capado a 2000
+   * y se filtraba en el navegador: un cliente más allá del tope nunca aparecía
+   * ni buscándolo). Ahora la búsqueda y la página las resuelve la base:
+   *  - nombre y nroCliente: contains (el padrón es acotado; el orderBy usa el
+   *    índice [nombre]). Se mantiene `contains` en nro para no perder los matches
+   *    parciales que ya hacía la búsqueda anterior.
+   * Devuelve { total, items } para que el front pagine sin traer toda la tabla.
+   * skip/take se sanitizan (NaN/negativos → defaults): `?? 0` no atrapa NaN.
+   */
+  async listar(params: { q?: string; skip?: number; take?: number }) {
+    const take = Number.isFinite(params.take) ? Math.min(Math.max(params.take!, 1), 500) : 50;
+    const skip = Number.isFinite(params.skip) && params.skip! > 0 ? Math.floor(params.skip!) : 0;
+    const q = params.q?.trim();
     const t = q ? escaparLike(q) : '';
     const where = q
       ? { OR: [{ nombre: { contains: t } }, { nroCliente: { contains: t } }] }
       : {};
-    // Guardarraíl: cota el listado para no transferir toda la tabla. El índice
-    // [nombre] (schema) cubre el orderBy y evita el filesort. Si el padrón
-    // supera este tope, la búsqueda `q` acota el resultado del lado del server.
-    return this.prisma.cliente.findMany({
-      where,
-      select: PUBLICO,
-      orderBy: { nombre: 'asc' },
-      take: 2000,
-    });
+
+    const [total, items] = await Promise.all([
+      this.prisma.cliente.count({ where }),
+      this.prisma.cliente.findMany({
+        where,
+        select: PUBLICO,
+        orderBy: { nombre: 'asc' },
+        skip,
+        take,
+      }),
+    ]);
+    return { total, items };
   }
 
   /**

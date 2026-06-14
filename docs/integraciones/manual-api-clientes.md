@@ -137,7 +137,7 @@ curl -s -X POST https://devoluciones.grupaldistribuidora.com.ar/api/clientes/imp
 Con el mismo token se puede verificar lo cargado:
 
 ```
-GET /api/clientes?q=C-00123          → ficha completa (requiere cliente.administrar)
+GET /api/clientes?q=C-00123          → { total, items } paginado (skip/take, take máx. 500, default 50; requiere cliente.administrar)
 GET /api/clientes/buscar?q=Norte     → autocomplete liviano (máx. 10, solo activos)
 ```
 

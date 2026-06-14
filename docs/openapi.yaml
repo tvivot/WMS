@@ -224,9 +224,20 @@ paths:
           in: query
           schema:
             type: string
+        - name: skip
+          required: false
+          in: query
+          schema:
+            type: integer
+        - name: take
+          required: false
+          in: query
+          description: "Página (default 50, máx. 500)"
+          schema:
+            type: integer
       responses:
         "200":
-          description: ""
+          description: "Listado paginado: { total, items }"
       tags: &a3
         - Clientes
     post:

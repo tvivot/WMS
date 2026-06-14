@@ -21,8 +21,16 @@ export class ClientesController {
 
   @RequierePermiso(PERMISOS.CLIENTE_ADMINISTRAR)
   @Get()
-  listar(@Query('q') q?: string) {
-    return this.svc.listar(q);
+  listar(
+    @Query('q') q?: string,
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+  ) {
+    return this.svc.listar({
+      q,
+      skip: skip ? Number(skip) : undefined,
+      take: take ? Number(take) : undefined,
+    });
   }
 
   /**
