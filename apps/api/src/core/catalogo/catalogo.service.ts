@@ -11,6 +11,13 @@ import { normalizarIsbn } from './isbn.util';
 /** Subcarpeta (bajo uploads) y prefijo de URL para las portadas de productos. */
 const SUBCARPETA_PRODUCTOS = 'productos';
 
+/** Parte un arreglo en bloques de tamaño n (para batch/chunked queries). */
+function enBloques<T>(arr: T[], n: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
+
 export interface ProductoResuelto {
   id: number;
   codigoInterno: string;
@@ -93,10 +100,14 @@ export class CatalogoService {
   ): Promise<{ procesados: number; isbnsInvalidos: string[] }> {
     let procesados = 0;
     const isbnsInvalidos: string[] = [];
-    for (const p of productos) {
-      const r = await this.upsertProducto(p);
-      procesados++;
-      isbnsInvalidos.push(...r.isbnsInvalidos);
+    // Concurrencia acotada (5 a la vez): reduce el wall-clock del lote sin
+    // saturar el pool de conexiones ni arriesgar choques de ISBN entre filas.
+    for (const bloque of enBloques(productos, 5)) {
+      const res = await Promise.all(bloque.map((p) => this.upsertProducto(p)));
+      for (const r of res) {
+        procesados++;
+        isbnsInvalidos.push(...r.isbnsInvalidos);
+      }
     }
     return { procesados, isbnsInvalidos };
   }
@@ -114,54 +125,76 @@ export class CatalogoService {
     actualizados: number;
     errores: { isbn: string; error: string }[];
   }> {
-    let creados = 0;
-    let actualizados = 0;
     const errores: { isbn: string; error: string }[] = [];
 
+    // 1) Normalizar ISBN y descartar inválidos (sin abortar el lote). Dedup por
+    //    ISBN (la última fila gana) para no procesar el mismo dos veces.
+    const porIsbn = new Map<string, { isbn: string; titulo: string; editorial: string | null }>();
     for (const item of items) {
       const isbn = normalizarIsbn(item.isbn);
       if (!isbn) {
         errores.push({ isbn: item.isbn, error: 'ISBN inválido' });
         continue;
       }
-      try {
-        // La identidad es el ISBN: si ya está catalogado, se actualiza ese
-        // producto; si no, se crea uno nuevo con código interno = ISBN.
-        const existente = await this.prisma.productoIsbn.findUnique({
-          where: { isbn },
-          select: { productoId: true },
-        });
-        if (existente) {
-          await this.prisma.producto.update({
-            where: { id: existente.productoId },
-            data: { titulo: item.titulo, editorial: item.editorial ?? null },
-            select: { id: true },
-          });
-          actualizados++;
-        } else {
-          // ISBN no catalogado: crea (o reusa) el producto con código = ISBN
-          // y lo vincula. upsert evita chocar si el código ya existiera suelto.
-          const producto = await this.prisma.producto.upsert({
-            where: { codigoInterno: isbn },
-            create: {
-              codigoInterno: isbn,
-              titulo: item.titulo,
-              editorial: item.editorial ?? null,
-            },
-            update: { titulo: item.titulo, editorial: item.editorial ?? null },
-            // Solo el id: el import de productos NO depende de imagen_url (la
-            // portada es opcional y se sube aparte).
-            select: { id: true },
-          });
-          await this.prisma.productoIsbn.create({
-            data: { isbn, productoId: producto.id },
-          });
-          creados++;
-        }
-      } catch (err) {
-        errores.push({ isbn, error: (err as Error).message.slice(0, 200) });
-      }
+      porIsbn.set(isbn, { isbn, titulo: item.titulo, editorial: item.editorial ?? null });
     }
+    const unicos = [...porIsbn.values()];
+
+    // 2) Lookup masivo de los ISBN ya catalogados (una query por bloque), en vez
+    //    de un findUnique por fila (antes: N round-trips serializados).
+    const productoPorIsbn = new Map<string, number>();
+    for (const bloque of enBloques(unicos.map((v) => v.isbn), 1000)) {
+      const filas = await this.prisma.productoIsbn.findMany({
+        where: { isbn: { in: bloque } },
+        select: { isbn: true, productoId: true },
+      });
+      for (const f of filas) productoPorIsbn.set(f.isbn, f.productoId);
+    }
+
+    // 3) Actualizar los existentes: varias updates por transacción.
+    const existentes = unicos.filter((v) => productoPorIsbn.has(v.isbn));
+    let actualizados = 0;
+    for (const bloque of enBloques(existentes, 200)) {
+      await this.prisma.$transaction(
+        bloque.map((v) =>
+          this.prisma.producto.update({
+            where: { id: productoPorIsbn.get(v.isbn)! },
+            data: { titulo: v.titulo, editorial: v.editorial },
+            select: { id: true },
+          }),
+        ),
+      );
+      actualizados += bloque.length;
+    }
+
+    // 4) Crear los nuevos: producto (código interno = ISBN) + vínculo del ISBN.
+    //    createMany es idempotente (skipDuplicates); luego se releen los ids —
+    //    cubre tanto los recién creados como un código que ya existiera suelto.
+    const nuevos = unicos.filter((v) => !productoPorIsbn.has(v.isbn));
+    let creados = 0;
+    for (const bloque of enBloques(nuevos, 500)) {
+      await this.prisma.producto.createMany({
+        data: bloque.map((v) => ({
+          codigoInterno: v.isbn,
+          titulo: v.titulo,
+          editorial: v.editorial,
+        })),
+        skipDuplicates: true,
+      });
+      const prods = await this.prisma.producto.findMany({
+        where: { codigoInterno: { in: bloque.map((v) => v.isbn) } },
+        select: { id: true, codigoInterno: true },
+      });
+      const idPorCodigo = new Map(prods.map((p) => [p.codigoInterno, p.id]));
+      await this.prisma.productoIsbn.createMany({
+        data: bloque
+          .map((v) => ({ isbn: v.isbn, productoId: idPorCodigo.get(v.isbn) }))
+          .filter((d): d is { isbn: string; productoId: number } => d.productoId !== undefined),
+        skipDuplicates: true,
+      });
+      creados += bloque.length;
+    }
+
     return { recibidos: items.length, creados, actualizados, errores };
   }
 

@@ -36,9 +36,13 @@ export class AuditoriaService {
   }
 
   async listarPorEntidad(entidad: string, entidadId: string) {
+    // La auditoría es la tabla que más crece (cada cambio de estado/control
+    // inserta): se devuelven los últimos 200 movimientos para no traer todo el
+    // historial. El índice [entidad, entidadId] cubre el filtro.
     return this.prisma.auditoria.findMany({
       where: { entidad, entidadId },
       orderBy: { id: 'desc' },
+      take: 200,
     });
   }
 }

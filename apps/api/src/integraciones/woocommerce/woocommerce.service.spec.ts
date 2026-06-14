@@ -1,5 +1,24 @@
 import { WooCommerceService } from './woocommerce.service';
+import { normalizarWooUrl } from './woocommerce.config';
 import type { CatalogoService } from '../../core/catalogo/catalogo.service';
+
+/**
+ * Normalización de WOO_URL: fuerza https y saca barras finales. Evita el
+ * "Failed to parse URL" cuando la variable se carga sin esquema.
+ */
+describe('normalizarWooUrl', () => {
+  it('antepone https:// cuando falta el esquema', () => {
+    expect(normalizarWooUrl('grupaldistribuidora.com.ar')).toBe(
+      'https://grupaldistribuidora.com.ar',
+    );
+  });
+  it('eleva http:// a https://', () => {
+    expect(normalizarWooUrl('http://tienda.com')).toBe('https://tienda.com');
+  });
+  it('respeta https:// y elimina barras finales', () => {
+    expect(normalizarWooUrl('https://tienda.com/')).toBe('https://tienda.com');
+  });
+});
 
 /**
  * Tests del núcleo de sincronización de portadas (sin HTTP): matcheo por

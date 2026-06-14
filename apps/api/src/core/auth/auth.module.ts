@@ -7,13 +7,14 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { JwtStrategy } from './jwt.strategy';
+import { resolverJwtSecret } from './jwt-secret';
 import { PermisosGuard } from './permisos.guard';
 
 @Module({
   imports: [
     PassportModule,
     JwtModule.register({
-      secret: process.env.JWT_SECRET ?? 'dev-only-secret',
+      secret: resolverJwtSecret(),
       signOptions: { expiresIn: '8h' },
     }),
   ],

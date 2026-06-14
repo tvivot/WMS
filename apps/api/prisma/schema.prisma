@@ -58,6 +58,7 @@ model Usuario {
 
   roles UsuarioRol[]
 
+  @@index([nombre])
   @@map("core_usuario")
 }
 
@@ -120,6 +121,7 @@ model Cliente {
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt @map("updated_at")
 
+  @@index([nombre])
   @@map("core_cliente")
 }
 
@@ -248,6 +250,7 @@ model DevAutorizacion {
 
   @@index([estado])
   @@index([clienteId])
+  @@index([createdAt])
   @@map("dev_autorizacion")
 }
 

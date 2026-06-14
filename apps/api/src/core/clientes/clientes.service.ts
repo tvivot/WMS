@@ -17,6 +17,13 @@ const PUBLICO = {
  */
 const SIN_CLAVE = 'sin-clave';
 
+/** Parte un arreglo en bloques de tamaño n (para batch/chunked queries). */
+function enBloques<T>(arr: T[], n: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
+
 @Injectable()
 export class ClientesService {
   constructor(
@@ -28,7 +35,15 @@ export class ClientesService {
     const where = q
       ? { OR: [{ nombre: { contains: q } }, { nroCliente: { contains: q } }] }
       : {};
-    return this.prisma.cliente.findMany({ where, select: PUBLICO, orderBy: { nombre: 'asc' } });
+    // Guardarraíl: cota el listado para no transferir toda la tabla. El índice
+    // [nombre] (schema) cubre el orderBy y evita el filesort. Si el padrón
+    // supera este tope, la búsqueda `q` acota el resultado del lado del server.
+    return this.prisma.cliente.findMany({
+      where,
+      select: PUBLICO,
+      orderBy: { nombre: 'asc' },
+      take: 2000,
+    });
   }
 
   /**
@@ -79,43 +94,64 @@ export class ClientesService {
    * sin clave de portal (se habilita con reset-clave cuando haga falta).
    */
   async importar(items: ClienteImportDto[]) {
-    let creados = 0;
-    let actualizados = 0;
     const errores: { nroCliente: string; error: string }[] = [];
 
-    for (const item of items) {
-      try {
-        const existe = await this.prisma.cliente.findUnique({
-          where: { nroCliente: item.nroCliente },
-          select: { id: true },
-        });
-        if (existe) {
-          await this.prisma.cliente.update({
-            where: { nroCliente: item.nroCliente },
-            data: {
-              nombre: item.nombre,
-              direccion: item.direccion ?? null,
-              ...(item.activo !== undefined ? { activo: item.activo } : {}),
-            },
-          });
-          actualizados++;
-        } else {
-          await this.prisma.cliente.create({
-            data: {
-              nroCliente: item.nroCliente,
-              nombre: item.nombre,
-              direccion: item.direccion ?? null,
-              claveHash: SIN_CLAVE,
-              activo: item.activo ?? true,
-              primerIngreso: true,
-            },
-          });
-          creados++;
-        }
-      } catch (err) {
-        errores.push({ nroCliente: item.nroCliente, error: (err as Error).message.slice(0, 200) });
-      }
+    // Dedup por nro_cliente dentro del mismo lote (la última fila gana): evita
+    // procesar el mismo cliente dos veces y choques con skipDuplicates.
+    const porNro = new Map(items.map((i) => [i.nroCliente, i]));
+    const unicos = [...porNro.values()];
+
+    // 1) Una sola consulta (en bloques) para saber cuáles ya existen, en vez de
+    //    un findUnique por fila (antes: N round-trips serializados).
+    const existe = new Set<string>();
+    for (const bloque of enBloques(unicos.map((i) => i.nroCliente), 1000)) {
+      const filas = await this.prisma.cliente.findMany({
+        where: { nroCliente: { in: bloque } },
+        select: { nroCliente: true },
+      });
+      for (const f of filas) existe.add(f.nroCliente);
     }
+
+    const nuevos = unicos.filter((i) => !existe.has(i.nroCliente));
+    const aActualizar = unicos.filter((i) => existe.has(i.nroCliente));
+
+    // 2) Alta masiva de los nuevos (sin clave de portal) con createMany.
+    let creados = 0;
+    for (const bloque of enBloques(nuevos, 500)) {
+      const r = await this.prisma.cliente.createMany({
+        data: bloque.map((i) => ({
+          nroCliente: i.nroCliente,
+          nombre: i.nombre,
+          direccion: i.direccion ?? null,
+          claveHash: SIN_CLAVE,
+          activo: i.activo ?? true,
+          primerIngreso: true,
+        })),
+        skipDuplicates: true,
+      });
+      creados += r.count;
+    }
+
+    // 3) Actualización de existentes: varias updates por transacción (no toca la
+    //    clave). Agrupa los round-trips en lugar de uno serializado por fila.
+    let actualizados = 0;
+    for (const bloque of enBloques(aActualizar, 200)) {
+      await this.prisma.$transaction(
+        bloque.map((i) =>
+          this.prisma.cliente.update({
+            where: { nroCliente: i.nroCliente },
+            data: {
+              nombre: i.nombre,
+              direccion: i.direccion ?? null,
+              ...(i.activo !== undefined ? { activo: i.activo } : {}),
+            },
+            select: { id: true },
+          }),
+        ),
+      );
+      actualizados += bloque.length;
+    }
+
     return { recibidos: items.length, creados, actualizados, errores };
   }
 

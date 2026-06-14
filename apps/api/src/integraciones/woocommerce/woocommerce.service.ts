@@ -80,7 +80,8 @@ export class WooCommerceService {
     let sinImagen = 0;
     const errores: { productoId: number; error: string }[] = [];
 
-    for (const p of productos) {
+    // Procesa un producto: prueba sus ISBN (SKU) hasta encontrar imagen.
+    const procesarUno = async (p: { id: number; isbns: string[] }): Promise<void> => {
       try {
         let src: string | null = null;
         for (const isbn of p.isbns) {
@@ -96,6 +97,15 @@ export class WooCommerceService {
       } catch (err) {
         errores.push({ productoId: p.id, error: (err as Error).message.slice(0, 200) });
       }
+    };
+
+    // Concurrencia acotada: antes era 1 request HTTP por ISBN en serie (con
+    // timeout de 15s c/u → el lote de 200 se hacía eterno). Se procesan
+    // CONCURRENCIA productos en paralelo por bloque, sin saturar al servidor
+    // de WooCommerce. Los contadores se actualizan en el hilo único de JS.
+    const CONCURRENCIA = 8;
+    for (let i = 0; i < productos.length; i += CONCURRENCIA) {
+      await Promise.all(productos.slice(i, i + CONCURRENCIA).map(procesarUno));
     }
 
     return { configurado: true, revisados: productos.length, actualizados, sinImagen, errores };

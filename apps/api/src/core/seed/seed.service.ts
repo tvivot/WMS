@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PasswordService } from '../seguridad/password.service';
+import { generarClave } from '../seguridad/clave.util';
 import {
   PERMISOS_DESCRIPCION,
   ROLES_DEFAULT,
@@ -102,8 +103,10 @@ export class SeedService implements OnApplicationBootstrap {
     const ya = await this.prisma.usuario.findUnique({ where: { username } });
     if (ya) return;
 
-    const claveEnv = process.env.ADMIN_PASSWORD;
-    const clave = claveEnv ?? 'Admin1234!';
+    const claveEnv = process.env.ADMIN_PASSWORD?.trim() || undefined;
+    // Sin ADMIN_PASSWORD: clave ALEATORIA (no un literal público). Se loguea una
+    // vez para el primer login y se fuerza el cambio (primerIngreso).
+    const clave = claveEnv ?? generarClave();
     const rolAdmin = await this.prisma.rol.findUnique({
       where: { nombre: 'Administrador' },
     });
@@ -123,8 +126,9 @@ export class SeedService implements OnApplicationBootstrap {
     }
     if (!claveEnv) {
       this.logger.warn(
-        `Admin creado con clave POR DEFECTO (usuario="${username}", clave="Admin1234!"). ` +
-          'Cambiala en el primer ingreso o seteá ADMIN_PASSWORD en las env vars.',
+        `Admin creado con clave ALEATORIA (usuario="${username}", clave="${clave}"). ` +
+          'Anotala: se muestra solo en este log. Se fuerza el cambio en el primer ingreso. ' +
+          'Para una clave fija, seteá ADMIN_PASSWORD en las env vars.',
       );
     } else {
       this.logger.log(`Admin "${username}" creado desde ADMIN_PASSWORD.`);

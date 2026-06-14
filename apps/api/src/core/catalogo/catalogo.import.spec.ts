@@ -28,16 +28,31 @@ function crearFakePrisma() {
   const productos: ProdRow[] = [];
   const isbns: IsbnRow[] = [];
 
+  const enLista = (valor: string, inList?: string[]) => !inList || inList.includes(valor);
+
   const prisma = {
+    // El import batch ejecuta los updates dentro de $transaction([...]): el fake
+    // solo necesita esperar las promesas (los métodos ya mutan el estado).
+    $transaction: async (ops: Promise<unknown>[]) => Promise.all(ops),
     productoIsbn: {
-      findUnique: async ({ where: { isbn } }: { where: { isbn: string } }) =>
-        isbns.find((i) => i.isbn === isbn) ?? null,
-      create: async ({ data }: { data: IsbnRow }) => {
-        if (isbns.some((i) => i.isbn === data.isbn)) {
-          throw new Error('Unique constraint failed: isbn');
+      findMany: async ({ where }: { where?: { isbn?: { in?: string[] } } }) =>
+        isbns
+          .filter((i) => enLista(i.isbn, where?.isbn?.in))
+          .map((i) => ({ isbn: i.isbn, productoId: i.productoId })),
+      createMany: async ({
+        data,
+        skipDuplicates,
+      }: {
+        data: IsbnRow[];
+        skipDuplicates?: boolean;
+      }) => {
+        let count = 0;
+        for (const d of data) {
+          if (skipDuplicates && isbns.some((i) => i.isbn === d.isbn)) continue;
+          isbns.push({ isbn: d.isbn, productoId: d.productoId });
+          count++;
         }
-        isbns.push({ ...data });
-        return data;
+        return { count };
       },
     },
     producto: {
@@ -53,24 +68,25 @@ function crearFakePrisma() {
         Object.assign(p, data);
         return p;
       },
-      upsert: async ({
-        where: { codigoInterno },
-        create,
-        update,
+      createMany: async ({
+        data,
+        skipDuplicates,
       }: {
-        where: { codigoInterno: string };
-        create: Omit<ProdRow, 'id'>;
-        update: Partial<ProdRow>;
+        data: Omit<ProdRow, 'id'>[];
+        skipDuplicates?: boolean;
       }) => {
-        const existing = productos.find((x) => x.codigoInterno === codigoInterno);
-        if (existing) {
-          Object.assign(existing, update);
-          return existing;
+        let count = 0;
+        for (const d of data) {
+          if (skipDuplicates && productos.some((x) => x.codigoInterno === d.codigoInterno)) continue;
+          productos.push({ id: seq++, ...d, editorial: d.editorial ?? null });
+          count++;
         }
-        const row: ProdRow = { id: seq++, ...create };
-        productos.push(row);
-        return row;
+        return { count };
       },
+      findMany: async ({ where }: { where?: { codigoInterno?: { in?: string[] } } }) =>
+        productos
+          .filter((p) => enLista(p.codigoInterno, where?.codigoInterno?.in))
+          .map((p) => ({ id: p.id, codigoInterno: p.codigoInterno })),
     },
     _state: { productos, isbns },
   };

@@ -31,6 +31,7 @@ export class UsuariosService {
       where,
       include: { roles: { include: { rol: true } } },
       orderBy: { nombre: 'asc' },
+      take: 1000, // guardarraíl: los usuarios internos son pocos por naturaleza
     });
     return us.map((u) => this.mapear(u));
   }

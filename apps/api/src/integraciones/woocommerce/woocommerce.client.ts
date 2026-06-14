@@ -16,9 +16,19 @@ export class WooCommerceClient {
    * si no hay producto con ese SKU o no tiene imagen. Lanza si la API falla.
    */
   async imagenPorSku(sku: string): Promise<string | null> {
-    const url =
-      `${this.cfg.url}/wp-json/wc/v3/products` +
-      `?sku=${encodeURIComponent(sku)}&_fields=id,sku,images&per_page=1`;
+    const params = new URLSearchParams({
+      sku,
+      _fields: 'id,sku,images',
+      per_page: '1',
+      // Credenciales también por query string: muchos hostings compartidos de
+      // WordPress NO reenvían el header Authorization a PHP, y WooCommerce
+      // responde 401 "woocommerce_rest_cannot_view". Sobre HTTPS este es el
+      // método de autenticación soportado por WooCommerce. Se mantiene además
+      // el header Basic como respaldo para servidores que sí lo propagan.
+      consumer_key: this.cfg.key,
+      consumer_secret: this.cfg.secret,
+    });
+    const url = `${this.cfg.url}/wp-json/wc/v3/products?${params.toString()}`;
     const res = await fetch(url, {
       headers: { Authorization: this.auth(), Accept: 'application/json' },
       signal: AbortSignal.timeout(15_000),

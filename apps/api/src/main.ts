@@ -39,7 +39,16 @@ async function bootstrap(): Promise<void> {
     req.path.startsWith('/api/docs') ? next() : helmetMw(req as never, res as never, next),
   );
 
-  app.enableCors({ origin: process.env.CORS_ORIGIN ?? true });
+  // CORS restrictivo. Deployable único: la PWA se sirve same-origin, así que en
+  // producción NO se habilita CORS salvo que se declare un origen explícito en
+  // CORS_ORIGIN (lista separada por comas). En desarrollo se permite todo para
+  // no frenar el laburo local. Nunca se refleja un Origin arbitrario en prod.
+  const corsOrigin = process.env.CORS_ORIGIN?.trim();
+  if (corsOrigin) {
+    app.enableCors({ origin: corsOrigin.split(',').map((o) => o.trim()) });
+  } else if (process.env.NODE_ENV !== 'production') {
+    app.enableCors({ origin: true });
+  }
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
   // Documentación interactiva + contrato. Nunca debe impedir el arranque.
