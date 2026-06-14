@@ -11,6 +11,8 @@ export interface ResultadoSyncImagenes {
   actualizados: number;
   sinImagen: number;
   errores: { productoId: number; error: string }[];
+  /** true si se rechazó por haber ya una corrida en progreso (no se arrancó otra). */
+  enCurso?: boolean;
 }
 
 /** Busca la URL de imagen para un SKU (inyectable para testear sin HTTP). */
@@ -52,33 +54,59 @@ export class WooCommerceService {
    */
   @Interval('woo-sync-imagenes', 48 * 60 * 60 * 1000)
   async syncProgramado(): Promise<void> {
-    // Guard de reentrancia + try/catch: si una corrida tardara más que el
-    // intervalo no se solapa, y un fallo no queda como promesa rechazada sin
-    // manejar (el callback del @Interval no tiene a quién propagar el error).
-    if (!this.estaConfigurado() || this.sincEnCurso) return;
-    this.sincEnCurso = true;
+    if (!this.estaConfigurado()) return;
     try {
       const r = await this.sincronizarImagenes();
+      if (r.enCurso) return; // ya había una corrida en progreso
       this.logger.log(
         `Sync imágenes WooCommerce: ${r.actualizados} actualizadas, ` +
           `${r.sinImagen} sin imagen, ${r.errores.length} errores (de ${r.revisados}).`,
       );
     } catch (err) {
       this.logger.error(`Sync imágenes WooCommerce falló: ${(err as Error).message}`);
-    } finally {
-      this.sincEnCurso = false;
     }
   }
 
-  /** Completa portadas faltantes consultando WooCommerce por SKU = ISBN. */
-  async sincronizarImagenes(limite = 200): Promise<ResultadoSyncImagenes> {
+  /**
+   * Completa portadas faltantes consultando WooCommerce por SKU = ISBN.
+   * Recorre TODO el catálogo sin imagen paginando por cursor de `id` (de a 200),
+   * hasta agotar o llegar a `maxProductos`. Antes solo hacía una página de 200 y,
+   * como los irresolubles quedaban al frente, nunca avanzaba más allá.
+   *
+   * Guard de reentrancia (compartido cron + disparo manual): si ya hay una
+   * corrida en progreso devuelve `enCurso: true` sin arrancar otra en paralelo
+   * (evita duplicar carga contra WooCommerce y la DB).
+   */
+  async sincronizarImagenes(maxProductos = Infinity): Promise<ResultadoSyncImagenes> {
     const cfg = leerWooConfig();
     if (!cfg) {
       return { configurado: false, revisados: 0, actualizados: 0, sinImagen: 0, errores: [] };
     }
-    const client = new WooCommerceClient(cfg);
-    const productos = await this.catalogo.productosSinImagen(limite);
-    return this.procesar(productos, (sku) => client.imagenPorSku(sku));
+    if (this.sincEnCurso) {
+      return { configurado: true, revisados: 0, actualizados: 0, sinImagen: 0, errores: [], enCurso: true };
+    }
+    this.sincEnCurso = true;
+    try {
+      const client = new WooCommerceClient(cfg);
+      const acc: ResultadoSyncImagenes = {
+        configurado: true, revisados: 0, actualizados: 0, sinImagen: 0, errores: [],
+      };
+      const PAGINA = 200;
+      let desdeId = 0;
+      while (acc.revisados < maxProductos) {
+        const productos = await this.catalogo.productosSinImagen({ limite: PAGINA, desdeId });
+        if (productos.length === 0) break;
+        const r = await this.procesar(productos, (sku) => client.imagenPorSku(sku));
+        acc.revisados += r.revisados;
+        acc.actualizados += r.actualizados;
+        acc.sinImagen += r.sinImagen;
+        acc.errores.push(...r.errores);
+        desdeId = productos[productos.length - 1].id; // cursor: avanza siempre
+      }
+      return acc;
+    } finally {
+      this.sincEnCurso = false;
+    }
   }
 
   /**

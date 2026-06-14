@@ -6,12 +6,18 @@ import { CrearRolDto, EditarRolDto } from './dto';
 export class RolesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private async mapear(rolId: number) {
-    const rol = await this.prisma.rol.findUnique({
-      where: { id: rolId },
-      include: { permisos: { include: { permiso: true } }, _count: { select: { usuarios: true } } },
-    });
-    if (!rol) throw new NotFoundException('Rol no encontrado');
+  /** Include compartido para traer permisos + conteo de usuarios en una query. */
+  private static readonly INCLUDE = {
+    permisos: { include: { permiso: true } },
+    _count: { select: { usuarios: true } },
+  } as const;
+
+  /** Mapea un rol YA cargado (con INCLUDE) a la forma pública. */
+  private mapearDesde(rol: {
+    id: number; nombre: string; descripcion: string | null; activo: boolean;
+    _count: { usuarios: number };
+    permisos: { permiso: { codigo: string } }[];
+  }) {
     return {
       id: rol.id,
       nombre: rol.nombre,
@@ -22,9 +28,22 @@ export class RolesService {
     };
   }
 
+  private async mapear(rolId: number) {
+    const rol = await this.prisma.rol.findUnique({
+      where: { id: rolId },
+      include: RolesService.INCLUDE,
+    });
+    if (!rol) throw new NotFoundException('Rol no encontrado');
+    return this.mapearDesde(rol);
+  }
+
   async listar() {
-    const roles = await this.prisma.rol.findMany({ orderBy: { nombre: 'asc' } });
-    return Promise.all(roles.map((r) => this.mapear(r.id)));
+    // Una sola query con includes en vez de un findUnique por rol (N+1).
+    const roles = await this.prisma.rol.findMany({
+      orderBy: { nombre: 'asc' },
+      include: RolesService.INCLUDE,
+    });
+    return roles.map((r) => this.mapearDesde(r));
   }
 
   /** Catálogo completo de permisos (para construir el ABM). */

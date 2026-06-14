@@ -8,3 +8,12 @@ export function enBloques<T>(arr: T[], n: number): T[][] {
   for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
   return out;
 }
+
+/**
+ * Escapa los comodines de LIKE (`\` `%` `_`) para que en Prisma
+ * contains/startsWith/endsWith se tomen como literales. Sin esto, un término con
+ * `%` genera `LIKE '%%'` y devuelve toda la tabla (Prisma NO escapa el valor).
+ */
+export function escaparLike(s: string): string {
+  return s.replace(/[\\%_]/g, '\\$&');
+}

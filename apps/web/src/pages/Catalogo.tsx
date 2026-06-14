@@ -208,7 +208,7 @@ export function Catalogo() {
         <EmptyState titulo="Sin productos" sub={q ? 'Probá con otra búsqueda.' : 'Cargá productos para empezar.'} />
       ) : (
         <>
-          <DataGrid data={items} columns={columnas} storageKey="catalogo" />
+          <DataGrid data={items} columns={columnas} storageKey="catalogo" paginar={false} />
           <div className="flex items-center justify-between text-sm text-slate-500">
             <span className="tabnum">
               {desde}–{hasta} de {total}

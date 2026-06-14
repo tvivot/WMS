@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../../prisma/prisma.service';
 import { PasswordService } from '../seguridad/password.service';
 import { generarClave } from '../seguridad/clave.util';
+import { escaparLike } from '../util/bloques';
 import { CrearUsuarioDto, EditarUsuarioDto } from './dto';
 
 @Injectable()
@@ -24,8 +25,9 @@ export class UsuariosService {
   }
 
   async listar(q?: string) {
+    const t = q ? escaparLike(q) : '';
     const where = q
-      ? { OR: [{ nombre: { contains: q } }, { username: { contains: q } }] }
+      ? { OR: [{ nombre: { contains: t } }, { username: { contains: t } }] }
       : {};
     const us = await this.prisma.usuario.findMany({
       where,

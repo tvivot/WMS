@@ -279,13 +279,21 @@ export class CatalogoService {
    * el lote por corrida.
    */
   async productosSinImagen(
-    limite = 200,
+    opts: { limite?: number; desdeId?: number } = {},
   ): Promise<{ id: number; isbns: string[] }[]> {
     const filas = await this.prisma.producto.findMany({
-      where: { imagenUrl: null, activo: true },
+      // Cursor por `id`: el caller pagina con `desdeId` (último id procesado),
+      // así el avance NO depende de si se encontró imagen. Sin el cursor, los
+      // productos cuyo SKU no resuelve quedan con imagenUrl=null al frente y se
+      // re-traían en cada corrida → el sync se atascaba en los primeros 200.
+      where: {
+        imagenUrl: null,
+        activo: true,
+        ...(opts.desdeId ? { id: { gt: opts.desdeId } } : {}),
+      },
       select: { id: true, isbns: { select: { isbn: true } } },
       orderBy: { id: 'asc' },
-      take: Math.min(limite, 1000),
+      take: Math.min(opts.limite ?? 200, 1000),
     });
     return filas.map((f) => ({ id: f.id, isbns: f.isbns.map((i) => i.isbn) }));
   }
@@ -415,5 +423,39 @@ export class CatalogoService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Resuelve VARIOS ISBN en UNA sola query (evita el N+1 de resolver uno por uno
+   * dentro de un loop). Devuelve un Map por ISBN normalizado; los ISBN inválidos
+   * o no catalogados simplemente no aparecen en el Map (el caller decide qué hacer).
+   */
+  async resolverPorIsbnBatch(
+    isbnsEntrada: string[],
+  ): Promise<Map<string, ProductoResuelto>> {
+    const norms = [
+      ...new Set(
+        isbnsEntrada
+          .map((i) => normalizarIsbn(i))
+          .filter((n): n is string => !!n),
+      ),
+    ];
+    if (norms.length === 0) return new Map();
+    const filas = await this.prisma.productoIsbn.findMany({
+      where: { isbn: { in: norms } },
+      include: { producto: true },
+    });
+    return new Map(
+      filas.map((f) => [
+        f.isbn,
+        {
+          id: f.producto.id,
+          codigoInterno: f.producto.codigoInterno,
+          titulo: f.producto.titulo,
+          editorial: f.producto.editorial,
+          isbn: f.isbn,
+        },
+      ]),
+    );
   }
 }

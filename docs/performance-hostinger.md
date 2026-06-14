@@ -57,6 +57,19 @@ JWT_SECRET = <obligatorio: sin esto la app NO arranca fuera de dev>
   - El front debe buscar **server-side** (no bajar todo el dataset y filtrar en memoria).
 - **orderBy** sobre una columna sin índice = filesort. Indexar la columna del `orderBy`.
 
+## Si DESPUÉS de las env vars SIGUE picando (orden de ataque)
+
+1. **Verificar que las 4 env estén ACTIVAS en hPanel** (no solo en `.env.example`): `connection_limit` en `DATABASE_URL`, `UV_THREADPOOL_SIZE`, `VIPS_CONCURRENCY`, `NODE_OPTIONS`. Sin redeploy no toman efecto. Esto suele ser el 80%.
+2. **Topear los workers de Passenger** (no hay opción en la UI con preset "Other"): probar un **`.htaccess` en el directorio root de la app** (`./`):
+   ```
+   PassengerMinInstances 1
+   PassengerPoolIdleTime 300
+   # PassengerMaxPoolSize 1   # a veces solo válido en config global; probar y mirar el error log
+   ```
+   Revisar el error log de Passenger tras el deploy: si rechaza una directiva, lo dice ahí.
+3. **`engineType="library"`** (schema.prisma): el engine `binary` levanta un **proceso aparte por worker**; `library` corre in-process (sin proceso hijo). Se eligió `binary` por el panic "timer has gone away" — **probar `library` y vigilar el log**; si reaparece el panic, volver a `binary` (y entonces `connection_limit` bajo es obligatorio). El `.so` ya está generado.
+4. **Mover la migración al build** (sacarla del runtime): quitar `runMigrationsAsync()` de `main.ts` y encadenar `&& npm run migrate` al `build` del package.json raíz, para que corra UNA vez en el deploy y no por worker. Riesgo: el paso de build debe poder alcanzar la DB. Fallback manual: `POST /api/admin/migraciones`.
+
 ## Método para diagnosticar (no iterar a ciegas)
 
 Si una hipótesis de prueba/error falla 2 veces → **parar y orquestar agentes** en paralelo para

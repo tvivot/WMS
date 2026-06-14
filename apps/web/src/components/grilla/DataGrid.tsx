@@ -33,12 +33,14 @@ const TAMANOS_PAGINA = [20, 50, 100];
  * por grilla) y, si se pasa `buscar`, filtro de texto global sobre todas
  * las columnas.
  */
-export function DataGrid<T>({ data, columns, storageKey, buscar }: {
+export function DataGrid<T>({ data, columns, storageKey, buscar, paginar = true }: {
   data: T[];
   columns: ColumnDef<T, unknown>[];
   storageKey?: string;
   /** Habilita el buscador de texto global. Texto = placeholder del input. */
   buscar?: string;
+  /** Paginación client-side de la grilla. false cuando la vista pagina server-side. */
+  paginar?: boolean;
 }) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState('');
@@ -89,7 +91,7 @@ export function DataGrid<T>({ data, columns, storageKey, buscar }: {
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
+    ...(paginar ? { getPaginationRowModel: getPaginationRowModel() } : {}),
   });
 
   // Si el filtro deja menos páginas que la actual, volver a una válida.
@@ -193,6 +195,7 @@ export function DataGrid<T>({ data, columns, storageKey, buscar }: {
         </table>
       </div>
 
+      {paginar && (
       <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2.5 border-t border-slate-100 text-sm text-slate-500">
         <div className="flex items-center gap-2">
           <span>Filas por página</span>
@@ -250,6 +253,7 @@ export function DataGrid<T>({ data, columns, storageKey, buscar }: {
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }

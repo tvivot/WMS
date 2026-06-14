@@ -3,7 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PasswordService } from '../seguridad/password.service';
 import { generarClave } from '../seguridad/clave.util';
 import { ClienteImportDto, CrearClienteDto, EditarClienteDto } from './dto';
-import { enBloques } from '../util/bloques';
+import { enBloques, escaparLike } from '../util/bloques';
 
 const PUBLICO = {
   id: true, nroCliente: true, nombre: true, direccion: true, activo: true,
@@ -26,8 +26,9 @@ export class ClientesService {
   ) {}
 
   async listar(q?: string) {
+    const t = q ? escaparLike(q) : '';
     const where = q
-      ? { OR: [{ nombre: { contains: q } }, { nroCliente: { contains: q } }] }
+      ? { OR: [{ nombre: { contains: t } }, { nroCliente: { contains: t } }] }
       : {};
     // Guardarraíl: cota el listado para no transferir toda la tabla. El índice
     // [nombre] (schema) cubre el orderBy y evita el filesort. Si el padrón
@@ -47,10 +48,11 @@ export class ClientesService {
   async buscar(q: string) {
     const term = (q ?? '').trim();
     if (term.length < 2) return [];
+    const t = escaparLike(term);
     return this.prisma.cliente.findMany({
       where: {
         activo: true,
-        OR: [{ nroCliente: { contains: term } }, { nombre: { contains: term } }],
+        OR: [{ nroCliente: { contains: t } }, { nombre: { contains: t } }],
       },
       select: { id: true, nroCliente: true, nombre: true, direccion: true },
       orderBy: { nombre: 'asc' },

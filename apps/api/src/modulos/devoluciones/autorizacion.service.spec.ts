@@ -195,9 +195,18 @@ const CATALOGO: Record<string, { id: number; titulo: string }> = {
 
 function crearServicio() {
   const { prisma, db } = crearFakePrisma();
+  const resolverUno = (isbn: string) =>
+    CATALOGO[isbn] ? { ...CATALOGO[isbn], codigoInterno: `P-${CATALOGO[isbn].id}`, editorial: null, isbn } : null;
   const catalogo = {
-    resolverPorIsbnOpcional: async (isbn: string) =>
-      CATALOGO[isbn] ? { ...CATALOGO[isbn], codigoInterno: `P-${CATALOGO[isbn].id}`, editorial: null, isbn } : null,
+    resolverPorIsbnOpcional: async (isbn: string) => resolverUno(isbn),
+    resolverPorIsbnBatch: async (isbns: string[]) => {
+      const m = new Map<string, ReturnType<typeof resolverUno>>();
+      for (const isbn of isbns) {
+        const p = resolverUno(isbn);
+        if (p) m.set(isbn, p);
+      }
+      return m;
+    },
   };
   const auditoria = {
     registros: [] as Record<string, unknown>[],

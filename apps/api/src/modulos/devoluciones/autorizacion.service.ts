@@ -182,13 +182,17 @@ export class AutorizacionService {
     // Resolver ISBN→producto; rechazar no catalogados (no líneas fantasma).
     const resueltas: { isbn: string; productoId: number | null; cantidad: number }[] = [];
     const noCatalogados: string[] = [];
+    // Resolución en bloque (1 query) en vez de un findUnique por línea (N+1).
+    const productos = await this.catalogo.resolverPorIsbnBatch(
+      dto.lineas.map((l) => l.isbn),
+    );
     for (const linea of dto.lineas) {
       const norm = normalizarIsbn(linea.isbn);
       if (!norm) {
         noCatalogados.push(linea.isbn);
         continue;
       }
-      const prod = await this.catalogo.resolverPorIsbnOpcional(norm);
+      const prod = productos.get(norm);
       if (!prod) {
         noCatalogados.push(linea.isbn);
         continue;
@@ -311,6 +315,10 @@ export class AutorizacionService {
   > {
     const filas: { bultoId: number; isbn: string; productoId: number; cantidad: number; malEstado: number }[] = [];
     const noCatalogados: string[] = [];
+    // Resolución en bloque (1 query) en vez de un findUnique por control (N+1).
+    const productos = await this.catalogo.resolverPorIsbnBatch(
+      controles.map((c) => c.isbn),
+    );
     for (const c of controles) {
       const norm = normalizarIsbn(c.isbn);
       if (!norm) throw new BadRequestException(`ISBN inválido: ${c.isbn}`);
@@ -318,7 +326,7 @@ export class AutorizacionService {
       if (malo > c.cantidad) {
         throw new BadRequestException('mal estado no puede superar la cantidad');
       }
-      const prod = await this.catalogo.resolverPorIsbnOpcional(norm);
+      const prod = productos.get(norm);
       if (!prod) {
         noCatalogados.push(norm);
         continue;
@@ -595,6 +603,7 @@ export class AutorizacionService {
     const items = await this.prisma.devAutorizacion.findMany({
       where,
       orderBy: { id: 'desc' },
+      take: 1000, // guardarraíl: la grilla muestra las más recientes (índices estado/clienteId)
     });
     // Nombre del cliente para la grilla (referencia por ID, sin FK).
     const ids = [...new Set(items.map((i) => i.clienteId))];

@@ -14,6 +14,7 @@ interface ResultadoSync {
   actualizados: number;
   sinImagen: number;
   errores: { productoId: number; error: string }[];
+  enCurso?: boolean;
 }
 
 /**
@@ -117,7 +118,13 @@ export function Configuracion() {
               </p>
             )}
 
-            {resultado && (
+            {resultado?.enCurso && (
+              <p className="mt-3 text-sm text-amber-700 bg-amber-50 border border-amber-200 px-4 py-2 rounded-lg inline-flex items-center gap-1.5">
+                <Loader2 className="h-4 w-4 animate-spin" /> Ya hay una sincronización en curso. Esperá a que termine.
+              </p>
+            )}
+
+            {resultado && !resultado.enCurso && (
               <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <Metrica icon={ImageDown} label="Actualizadas" valor={resultado.actualizados} tono="ok" />
                 <Metrica icon={Plug} label="Revisadas" valor={resultado.revisados} tono="neutro" />
@@ -126,7 +133,7 @@ export function Configuracion() {
               </div>
             )}
 
-            {resultado && resultado.actualizados === 0 && resultado.sinImagen === 0 && resultado.revisados === 0 && (
+            {resultado && !resultado.enCurso && resultado.actualizados === 0 && resultado.sinImagen === 0 && resultado.revisados === 0 && (
               <p className="mt-3 text-sm text-emerald-700 inline-flex items-center gap-1.5">
                 <CheckCircle2 className="h-4 w-4" /> No hay productos pendientes de portada.
               </p>
