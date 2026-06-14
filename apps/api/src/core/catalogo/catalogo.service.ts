@@ -200,6 +200,35 @@ export class CatalogoService {
   }
 
   /**
+   * Productos sin portada, con sus ISBNs. Para procesos que completan la imagen
+   * desde una fuente externa (p. ej. el conector WooCommerce). `limite` acota
+   * el lote por corrida.
+   */
+  async productosSinImagen(
+    limite = 200,
+  ): Promise<{ id: number; isbns: string[] }[]> {
+    const filas = await this.prisma.producto.findMany({
+      where: { imagenUrl: null, activo: true },
+      select: { id: true, isbns: { select: { isbn: true } } },
+      orderBy: { id: 'asc' },
+      take: Math.min(limite, 1000),
+    });
+    return filas.map((f) => ({ id: f.id, isbns: f.isbns.map((i) => i.isbn) }));
+  }
+
+  /**
+   * Setea la portada como una URL externa (no se descarga ni se guarda archivo).
+   * La usa el conector WooCommerce para referenciar la imagen ya hosteada allá.
+   */
+  async setImagenUrl(productoId: number, url: string): Promise<void> {
+    await this.prisma.producto.update({
+      where: { id: productoId },
+      data: { imagenUrl: url },
+      select: { id: true },
+    });
+  }
+
+  /**
    * Guarda la portada de un producto: valida que sea una imagen real (magic
    * bytes), la comprime a WebP (o guarda el original si sharp no está
    * disponible), la escribe en la carpeta de uploads y devuelve el link

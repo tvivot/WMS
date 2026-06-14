@@ -6,6 +6,7 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { runMigrationsAsync } from './migrate';
 import { construirDocOpenApi } from './openapi.config';
+import { wooImgHost } from './integraciones/woocommerce/woocommerce.config';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
@@ -22,7 +23,9 @@ async function bootstrap(): Promise<void> {
         scriptSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
         fontSrc: ["'self'", 'https://fonts.gstatic.com'],
-        imgSrc: ["'self'", 'data:'],
+        // 'self' + data: + (si está configurado) el host de WooCommerce, para
+        // mostrar portadas referenciadas por URL externa.
+        imgSrc: ["'self'", 'data:', ...(wooImgHost() ? [wooImgHost() as string] : [])],
         connectSrc: ["'self'"],
         mediaSrc: ["'self'", 'blob:'],
         workerSrc: ["'self'", 'blob:'],
