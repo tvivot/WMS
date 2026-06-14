@@ -32,6 +32,18 @@ export class WooCommerceService {
   }
 
   /**
+   * Presencia de cada variable (NO devuelve los valores: solo true/false) para
+   * que el admin pueda diagnosticar qué falta sin exponer secretos.
+   */
+  detalleConfig(): { url: boolean; key: boolean; secret: boolean } {
+    return {
+      url: !!process.env.WOO_URL?.trim(),
+      key: !!process.env.WOO_KEY?.trim(),
+      secret: !!process.env.WOO_SECRET?.trim(),
+    };
+  }
+
+  /**
    * Corrida automática cada 48 h (desde el arranque del proceso) para mantener
    * las portadas al día. No hace nada si WooCommerce no está configurado.
    */

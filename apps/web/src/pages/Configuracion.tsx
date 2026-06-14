@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, ImageDown, Images, Loader2, Plug, RefreshCw } from 'lucide-react';
+import { Check, CheckCircle2, ImageDown, Images, Loader2, Plug, RefreshCw, X } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { Card } from '../components/ui';
 
 interface EstadoWoo {
   configurado: boolean;
+  variables?: { url: boolean; key: boolean; secret: boolean };
 }
 
 interface ResultadoSync {
@@ -70,6 +71,21 @@ export function Configuracion() {
               forzar una corrida manual.
             </p>
 
+            {estado && !estado.configurado && estado.variables && (
+              <div className="mt-3 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm">
+                <p className="text-amber-800 font-medium">Faltan variables de entorno en el servidor</p>
+                <ul className="mt-1.5 space-y-1">
+                  <VarFila nombre="WOO_URL" ok={estado.variables.url} />
+                  <VarFila nombre="WOO_KEY" ok={estado.variables.key} />
+                  <VarFila nombre="WOO_SECRET" ok={estado.variables.secret} />
+                </ul>
+                <p className="text-amber-700 mt-2 text-xs">
+                  Cargá las tres en Hostinger (hPanel → Variables de entorno) y <strong>reiniciá/redeploy</strong> la
+                  app: los cambios de entorno no toman efecto hasta reiniciar el proceso.
+                </p>
+              </div>
+            )}
+
             <div className="mt-4 flex flex-wrap items-center gap-3">
               <button
                 className="btn-primary"
@@ -132,6 +148,22 @@ function EstadoChip({ estado }: { estado: EstadoWoo | null }) {
     <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 text-slate-500 px-2.5 h-6 text-xs font-semibold">
       <span className="h-1.5 w-1.5 rounded-full bg-slate-400" /> No configurado
     </span>
+  );
+}
+
+function VarFila({ nombre, ok }: { nombre: string; ok: boolean }) {
+  return (
+    <li className="flex items-center gap-2">
+      {ok ? (
+        <Check className="h-4 w-4 text-emerald-600 shrink-0" />
+      ) : (
+        <X className="h-4 w-4 text-red-500 shrink-0" />
+      )}
+      <code className="text-xs font-mono text-slate-700">{nombre}</code>
+      <span className={`text-xs ${ok ? 'text-emerald-700' : 'text-red-600'}`}>
+        {ok ? 'cargada' : 'falta'}
+      </span>
+    </li>
   );
 }
 

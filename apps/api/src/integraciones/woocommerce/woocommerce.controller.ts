@@ -14,7 +14,7 @@ export class WooCommerceController {
 
   @Get('estado')
   estado() {
-    return { configurado: this.woo.estaConfigurado() };
+    return { configurado: this.woo.estaConfigurado(), variables: this.woo.detalleConfig() };
   }
 
   /** Completa portadas faltantes desde WooCommerce (SKU = ISBN) y devuelve el resumen. */
