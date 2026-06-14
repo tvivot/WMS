@@ -76,6 +76,7 @@ Content-Type: application/json
 
 ### Semántica (importante)
 
+- **La portada (imagen) es OPCIONAL** y NO forma parte de este import: un producto **sin imagen es válido** y se carga igual. La portada, si se quiere, se sube aparte (ver §5.b). No hace falta mandar ningún campo de imagen.
 - **Upsert por `isbn`**: la operación es **idempotente** — reenviar el mismo lote produce el mismo resultado. Ante un error de red, reintentar el lote completo es seguro.
 - Es un **espejo de datos**: el sistema externo es el dueño de `isbn`, `titulo` y `editorial`.
 - Un ISBN no catalogado al momento de un escaneo de devolución **no crea líneas fantasma**: por eso conviene mantener el catálogo al día con esta importación.

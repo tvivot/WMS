@@ -71,6 +71,9 @@ export class CatalogoService {
         equivPallet: dto.equivPallet ?? 1,
         ...(dto.activo !== undefined ? { activo: dto.activo } : {}),
       },
+      // Solo el id: el alta NO depende de columnas de imagen (la portada es
+      // opcional y va por otra vía), así no se acopla a imagen_url.
+      select: { id: true },
     });
 
     // Sincroniza ISBNs: agrega los nuevos (un ISBN pertenece a un solo producto).
@@ -132,6 +135,7 @@ export class CatalogoService {
           await this.prisma.producto.update({
             where: { id: existente.productoId },
             data: { titulo: item.titulo, editorial: item.editorial ?? null },
+            select: { id: true },
           });
           actualizados++;
         } else {
@@ -145,6 +149,9 @@ export class CatalogoService {
               editorial: item.editorial ?? null,
             },
             update: { titulo: item.titulo, editorial: item.editorial ?? null },
+            // Solo el id: el import de productos NO depende de imagen_url (la
+            // portada es opcional y se sube aparte).
+            select: { id: true },
           });
           await this.prisma.productoIsbn.create({
             data: { isbn, productoId: producto.id },
