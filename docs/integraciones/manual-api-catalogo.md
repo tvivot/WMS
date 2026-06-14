@@ -133,6 +133,33 @@ curl -s -X POST https://devoluciones.grupaldistribuidora.com.ar/api/catalogo/pro
   }'
 ```
 
+## 5.b Portada del producto (imagen)
+
+La portada NO va en el import JSON (que es solo ISBN/Título/Editorial): se sube aparte, por producto, como archivo. El WMS la **valida, la comprime a WebP** y la guarda, devolviendo el **link público autogenerado**.
+
+```
+POST /api/catalogo/productos/{id}/imagen
+Authorization: Bearer <token>
+Content-Type: multipart/form-data
+```
+
+- Campo del form: **`imagen`** (el archivo). Formatos aceptados: **JPG, PNG, WebP, GIF**. Tamaño máx.: **8 MB**. Se valida por contenido real (no por la extensión).
+- `{id}` es el `id` interno del producto (obtenible con `GET /api/catalogo/productos?q=<isbn>`).
+
+**Respuesta 201:**
+```json
+{ "imagenUrl": "/uploads/productos/producto-123-a1b2c3d4.webp" }
+```
+
+La `imagenUrl` queda guardada en el producto y se devuelve también en el listado/consulta. Es una ruta del mismo dominio (`https://devoluciones.grupaldistribuidora.com.ar/uploads/...`). Reenviar una imagen nueva **reemplaza** la anterior. Para quitarla: `DELETE /api/catalogo/productos/{id}/imagen`.
+
+Ejemplo (curl):
+```bash
+curl -s -X POST https://devoluciones.grupaldistribuidora.com.ar/api/catalogo/productos/123/imagen \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "imagen=@portada.jpg"
+```
+
 ## 6. Consulta (para verificación del integrador)
 
 Con el mismo token se puede verificar lo cargado:

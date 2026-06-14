@@ -49,9 +49,29 @@ async function request<T>(
   return data as T;
 }
 
+/** Subida multipart (archivos). No setea Content-Type: el browser pone el boundary. */
+async function upload<T>(path: string, form: FormData): Promise<T> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetch(`/api${path}`, { method: 'POST', headers, body: form });
+  if (res.status === 401) clearToken();
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!res.ok) {
+    const msg =
+      (data && (data.message?.toString?.() ?? data.error)) || `Error ${res.status}`;
+    throw new ApiError(res.status, Array.isArray(msg) ? msg.join(', ') : msg);
+  }
+  return data as T;
+}
+
 export const api = {
   get: <T>(p: string) => request<T>('GET', p),
   post: <T>(p: string, b?: unknown) => request<T>('POST', p, b),
   put: <T>(p: string, b?: unknown) => request<T>('PUT', p, b),
   patch: <T>(p: string, b?: unknown) => request<T>('PATCH', p, b),
+  delete: <T>(p: string) => request<T>('DELETE', p),
+  upload,
 };

@@ -22,6 +22,10 @@ apps/api/src/static/*
 # claude code: overrides locales (no compartir)
 .claude/settings.local.json
 
+# portadas subidas por usuarios — datos de runtime, fuera de git
+Tapas/
+apps/api/Tapas/
+
 # logs & misc
 *.log
 npm-debug.log*

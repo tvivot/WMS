@@ -6,6 +6,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule } from './prisma/prisma.module';
+import { UPLOADS_RUTA_PUBLICA, uploadsDir } from './core/storage/uploads';
 import { HealthModule } from './health/health.module';
 import { AuthModule } from './core/auth/auth.module';
 import { SeedModule } from './core/seed/seed.module';
@@ -36,6 +37,14 @@ import { DevolucionesModule } from './modulos/devoluciones/devoluciones.module';
     AdminModule,
     DevolucionesModule,
     HealthModule,
+    // Sirve los archivos subidos por usuarios (portadas) bajo /uploads. Va
+    // ANTES que la SPA para que /uploads/* no caiga en el fallback a index.html.
+    // La carpeta vive FUERA de dist/ (ver uploadsDir) para sobrevivir deploys.
+    ServeStaticModule.forRoot({
+      rootPath: uploadsDir(),
+      serveRoot: UPLOADS_RUTA_PUBLICA,
+      serveStaticOptions: { index: false, fallthrough: true },
+    }),
     // Sirve la PWA compilada. En runtime, __dirname = dist/, así que el path
     // resuelve a dist/static (nest-cli copia src/static -> dist/static).
     // La API lleva prefijo global '/api', por lo que NO colisiona con los

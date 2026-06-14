@@ -14,6 +14,8 @@ export default defineConfig({
     // Solo en dev: proxy al API. En prod es mismo origen (Nest sirve ambos).
     proxy: {
       '/api': 'http://localhost:3000',
+      // Imágenes subidas (portadas) las sirve el API bajo /uploads.
+      '/uploads': 'http://localhost:3000',
     },
   },
   plugins: [

@@ -1,7 +1,15 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service';
+import { UPLOADS_RUTA_PUBLICA, uploadsDir } from '../storage/uploads';
 import { ProductoDto, ProductoImportDto } from './dto';
+import { convertirAWebp, detectarTipoImagen } from './imagen.util';
 import { normalizarIsbn } from './isbn.util';
+
+/** Subcarpeta (bajo uploads) y prefijo de URL para las portadas de productos. */
+const SUBCARPETA_PRODUCTOS = 'productos';
 
 export interface ProductoResuelto {
   id: number;
@@ -182,6 +190,87 @@ export class CatalogoService {
     });
     if (!p) throw new NotFoundException('Producto no encontrado');
     return p;
+  }
+
+  /**
+   * Guarda la portada de un producto: valida que sea una imagen real (magic
+   * bytes), la comprime a WebP (o guarda el original si sharp no está
+   * disponible), la escribe en la carpeta de uploads y devuelve el link
+   * público autogenerado, que queda en `producto.imagenUrl`.
+   */
+  async setImagen(
+    id: number,
+    file?: { buffer?: Buffer; size?: number },
+  ): Promise<{ imagenUrl: string }> {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('No se recibió ninguna imagen');
+    }
+    const tipo = detectarTipoImagen(file.buffer);
+    if (!tipo) {
+      throw new BadRequestException(
+        'El archivo no es una imagen válida (JPG, PNG, WebP o GIF)',
+      );
+    }
+
+    const producto = await this.prisma.producto.findUnique({
+      where: { id },
+      select: { id: true, imagenUrl: true },
+    });
+    if (!producto) throw new NotFoundException('Producto no encontrado');
+
+    let datos: Buffer;
+    let ext: string;
+    try {
+      const webp = await convertirAWebp(file.buffer);
+      if (webp) {
+        datos = webp;
+        ext = 'webp';
+      } else {
+        // sharp no disponible en el entorno: se guarda el original sin comprimir.
+        datos = file.buffer;
+        ext = tipo.ext;
+      }
+    } catch {
+      throw new BadRequestException('No se pudo procesar la imagen');
+    }
+
+    const dir = join(uploadsDir(), SUBCARPETA_PRODUCTOS);
+    await mkdir(dir, { recursive: true });
+    // Nombre derivado del id + sufijo aleatorio: evita path traversal (no usa el
+    // nombre del cliente) y rompe el caché del navegador al reemplazar.
+    const nombre = `producto-${id}-${randomBytes(4).toString('hex')}.${ext}`;
+    await writeFile(join(dir, nombre), datos);
+
+    // Borra la portada anterior (best-effort) para no acumular huérfanos.
+    await this.borrarArchivoImagen(producto.imagenUrl);
+
+    const imagenUrl = `${UPLOADS_RUTA_PUBLICA}/${SUBCARPETA_PRODUCTOS}/${nombre}`;
+    await this.prisma.producto.update({ where: { id }, data: { imagenUrl } });
+    return { imagenUrl };
+  }
+
+  /** Quita la portada de un producto (borra el archivo y limpia el campo). */
+  async eliminarImagen(id: number): Promise<{ ok: true }> {
+    const producto = await this.prisma.producto.findUnique({
+      where: { id },
+      select: { id: true, imagenUrl: true },
+    });
+    if (!producto) throw new NotFoundException('Producto no encontrado');
+    await this.borrarArchivoImagen(producto.imagenUrl);
+    await this.prisma.producto.update({ where: { id }, data: { imagenUrl: null } });
+    return { ok: true };
+  }
+
+  /** Borra el archivo físico de una imagen a partir de su URL pública. */
+  private async borrarArchivoImagen(imagenUrl: string | null): Promise<void> {
+    if (!imagenUrl) return;
+    const nombre = imagenUrl.split('/').pop();
+    if (!nombre) return;
+    try {
+      await unlink(join(uploadsDir(), SUBCARPETA_PRODUCTOS, nombre));
+    } catch {
+      /* el archivo puede no existir (ya borrado / entorno distinto): se ignora */
+    }
   }
 
   /**

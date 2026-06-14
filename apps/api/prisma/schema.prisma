@@ -129,6 +129,8 @@ model Producto {
   titulo        String   @db.VarChar(300)
   editorial     String?  @db.VarChar(200)
   autor         String?  @db.VarChar(200)
+  // Portada del libro: ruta pública servida bajo /uploads (WebP comprimido).
+  imagenUrl     String?  @map("imagen_url") @db.VarChar(300)
   // Unidad base = libro. equivCaja = unidades por caja; equivPallet = cajas por pallet.
   unidadBase    String   @default("unidad") @map("unidad_base") @db.VarChar(20)
   equivCaja     Int      @default(1) @map("equiv_caja")

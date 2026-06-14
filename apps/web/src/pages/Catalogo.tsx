@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus } from 'lucide-react';
+import { ImagePlus, Loader2, Plus } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { api } from '../lib/api';
 import { Card, EmptyState, Field, Spinner } from '../components/ui';
@@ -10,6 +10,7 @@ interface Producto {
   codigoInterno: string;
   titulo: string;
   editorial: string | null;
+  imagenUrl: string | null;
   isbns: { isbn: string }[];
 }
 
@@ -20,6 +21,7 @@ export function Catalogo() {
   const [creando, setCreando] = useState(false);
   const [form, setForm] = useState({ isbn: '', titulo: '', editorial: '' });
   const [error, setError] = useState<string | null>(null);
+  const [subiendo, setSubiendo] = useState<number | null>(null);
 
   // Carga todo el catálogo (paginando la API) para ordenar/paginar/buscar en
   // la grilla del lado del cliente, igual que el resto de las grillas.
@@ -63,8 +65,60 @@ export function Catalogo() {
     }
   };
 
+  const subirImagen = async (id: number, file: File) => {
+    setError(null);
+    setSubiendo(id);
+    try {
+      const form = new FormData();
+      form.append('imagen', file);
+      await api.upload(`/catalogo/productos/${id}/imagen`, form);
+      await cargar();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSubiendo(null);
+    }
+  };
+
   const columnas = useMemo<ColumnDef<Producto, unknown>[]>(
     () => [
+      {
+        id: 'portada',
+        header: 'Portada',
+        enableSorting: false,
+        cell: ({ row }) => {
+          const p = row.original;
+          const cargando = subiendo === p.id;
+          return (
+            <label
+              className="group relative flex h-16 w-12 cursor-pointer items-center justify-center overflow-hidden rounded border border-slate-200 bg-slate-50 hover:border-brand-green-ink"
+              title={p.imagenUrl ? 'Cambiar portada' : 'Subir portada'}
+            >
+              {p.imagenUrl ? (
+                <img src={p.imagenUrl} alt={p.titulo} className="h-full w-full object-cover" />
+              ) : (
+                <ImagePlus className="h-5 w-5 text-slate-400 group-hover:text-brand-green-ink" />
+              )}
+              {cargando && (
+                <span className="absolute inset-0 flex items-center justify-center bg-white/70">
+                  <Loader2 className="h-4 w-4 animate-spin text-slate-500" />
+                </span>
+              )}
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                className="hidden"
+                disabled={cargando}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void subirImagen(p.id, f);
+                  e.target.value = '';
+                }}
+              />
+            </label>
+          );
+        },
+      },
       {
         id: 'isbn',
         header: 'ISBN',
@@ -81,7 +135,8 @@ export function Catalogo() {
         cell: ({ row }) => <span className="text-slate-500">{row.original.editorial ?? '—'}</span>,
       },
     ],
-    [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [subiendo],
   );
 
   return (

@@ -148,6 +148,45 @@ paths:
         "200":
           description: ""
       tags: *a2
+  /api/catalogo/productos/{id}/imagen:
+    post:
+      operationId: CatalogoController_subirImagen
+      description: >-
+        Sube/reemplaza la portada (multipart/form-data, campo `imagen`). Se
+        valida por contenido, se comprime a WebP y se guarda; devuelve
+        `{ imagenUrl }`. Máx. 8 MB.
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                imagen:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: ""
+      tags: *a2
+    delete:
+      operationId: CatalogoController_eliminarImagen
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: number
+      responses:
+        "200":
+          description: ""
+      tags: *a2
   /api/catalogo/productos/bulk:
     post:
       operationId: CatalogoController_bulk

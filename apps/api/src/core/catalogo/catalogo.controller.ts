@@ -1,17 +1,32 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
   Post,
   Put,
   Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { RequierePermiso } from '../auth/decoradores';
 import { PERMISOS } from '../auth/permisos';
 import { CatalogoService } from './catalogo.service';
 import { ProductoDto, ProductosBulkDto, ProductosImportarDto } from './dto';
+
+/** Tamaño máximo de la imagen de portada que se acepta subir (8 MB). */
+const MAX_IMAGEN_BYTES = 8 * 1024 * 1024;
+
+/** Forma mínima del archivo que inyecta multer (evita depender de tipos ambient). */
+interface ArchivoSubido {
+  buffer: Buffer;
+  size: number;
+  mimetype: string;
+  originalname: string;
+}
 
 @Controller('catalogo/productos')
 export class CatalogoController {
@@ -71,5 +86,26 @@ export class CatalogoController {
   @Post('import')
   importar(@Body() dto: ProductosImportarDto) {
     return this.catalogo.importarProductos(dto.productos);
+  }
+
+  /**
+   * Sube/reemplaza la portada de un producto (multipart, campo `imagen`).
+   * La imagen se valida, se comprime a WebP y se guarda; devuelve el link
+   * público autogenerado. Máx. 8 MB.
+   */
+  @RequierePermiso(PERMISOS.CATALOGO_ADMINISTRAR)
+  @Post(':id/imagen')
+  @UseInterceptors(FileInterceptor('imagen', { limits: { fileSize: MAX_IMAGEN_BYTES } }))
+  subirImagen(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() imagen: ArchivoSubido,
+  ) {
+    return this.catalogo.setImagen(id, imagen);
+  }
+
+  @RequierePermiso(PERMISOS.CATALOGO_ADMINISTRAR)
+  @Delete(':id/imagen')
+  eliminarImagen(@Param('id', ParseIntPipe) id: number) {
+    return this.catalogo.eliminarImagen(id);
   }
 }
