@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ImagePlus, Loader2, Plus } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, ImagePlus, Loader2, Plus, Search, X } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { api } from '../lib/api';
 import { Card, EmptyState, Field, Spinner } from '../components/ui';
@@ -14,38 +14,51 @@ interface Producto {
   isbns: { isbn: string }[];
 }
 
-const PAGINA = 500;
+const PAGINA = 50;
 
 export function Catalogo() {
   const [items, setItems] = useState<Producto[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [q, setQ] = useState('');
+  const [page, setPage] = useState(0);
   const [creando, setCreando] = useState(false);
   const [form, setForm] = useState({ isbn: '', titulo: '', editorial: '' });
   const [error, setError] = useState<string | null>(null);
   const [subiendo, setSubiendo] = useState<number | null>(null);
+  const debounce = useRef<ReturnType<typeof setTimeout>>();
 
-  // Carga todo el catálogo (paginando la API) para ordenar/paginar/buscar en
-  // la grilla del lado del cliente, igual que el resto de las grillas.
-  const cargar = async () => {
+  // Búsqueda SERVER-SIDE: una página por request, filtrada por la API (índices
+  // FULLTEXT/B-tree). Ya no se baja todo el catálogo al navegador.
+  const cargar = async (busqueda: string, pag: number) => {
     setItems(null);
     try {
-      const acumulado: Producto[] = [];
-      let skip = 0;
-      let total = Infinity;
-      while (acumulado.length < total) {
-        const r = await api.get<{ total: number; items: Producto[] }>(
-          `/catalogo/productos?skip=${skip}&take=${PAGINA}`,
-        );
-        total = r.total;
-        acumulado.push(...r.items);
-        if (r.items.length < PAGINA) break;
-        skip += PAGINA;
-      }
-      setItems(acumulado);
+      const qs = busqueda.trim() ? `&q=${encodeURIComponent(busqueda.trim())}` : '';
+      const r = await api.get<{ total: number; items: Producto[] }>(
+        `/catalogo/productos?skip=${pag * PAGINA}&take=${PAGINA}${qs}`,
+      );
+      setItems(r.items);
+      setTotal(r.total);
     } catch {
       setItems([]);
+      setTotal(0);
     }
   };
-  useEffect(() => { void cargar(); }, []);
+
+  // Debounce de la búsqueda: vuelve a página 0 y consulta tras 300ms sin tipear.
+  useEffect(() => {
+    clearTimeout(debounce.current);
+    debounce.current = setTimeout(() => {
+      setPage(0);
+      void cargar(q, 0);
+    }, 300);
+    return () => clearTimeout(debounce.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q]);
+
+  const irAPagina = (n: number) => {
+    setPage(n);
+    void cargar(q, n);
+  };
 
   const crear = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,7 +72,7 @@ export function Catalogo() {
       });
       setForm({ isbn: '', titulo: '', editorial: '' });
       setCreando(false);
-      void cargar();
+      void cargar(q, page);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -69,10 +82,10 @@ export function Catalogo() {
     setError(null);
     setSubiendo(id);
     try {
-      const form = new FormData();
-      form.append('imagen', file);
-      await api.upload(`/catalogo/productos/${id}/imagen`, form);
-      await cargar();
+      const fd = new FormData();
+      fd.append('imagen', file);
+      await api.upload(`/catalogo/productos/${id}/imagen`, fd);
+      await cargar(q, page);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -139,18 +152,40 @@ export function Catalogo() {
     [subiendo],
   );
 
+  const totalPaginas = Math.max(1, Math.ceil(total / PAGINA));
+  const desde = total === 0 ? 0 : page * PAGINA + 1;
+  const hasta = Math.min((page + 1) * PAGINA, total);
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">
           Catálogo{' '}
-          <span className="text-slate-400 text-base font-normal tabnum">
-            ({items?.length ?? 0})
-          </span>
+          <span className="text-slate-400 text-base font-normal tabnum">({total})</span>
         </h1>
         <button className="btn-primary" onClick={() => setCreando((v) => !v)}>
           <Plus className="h-4 w-4" /> Producto
         </button>
+      </div>
+
+      {/* Buscador server-side: título (por palabra), ISBN o código (por prefijo). */}
+      <div className="relative max-w-md">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+        <input
+          className="input pl-9 pr-9"
+          placeholder="Buscar por título, ISBN o código…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        {q && (
+          <button
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+            onClick={() => setQ('')}
+            title="Limpiar búsqueda"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       {creando && (
@@ -170,9 +205,33 @@ export function Catalogo() {
       {items === null ? (
         <div className="py-12 text-center"><Spinner className="text-slate-400" /></div>
       ) : items.length === 0 ? (
-        <EmptyState titulo="Sin productos" sub="Cargá productos o ajustá la búsqueda." />
+        <EmptyState titulo="Sin productos" sub={q ? 'Probá con otra búsqueda.' : 'Cargá productos para empezar.'} />
       ) : (
-        <DataGrid data={items} columns={columnas} storageKey="catalogo" buscar="Buscar por título, editorial o ISBN…" />
+        <>
+          <DataGrid data={items} columns={columnas} storageKey="catalogo" />
+          <div className="flex items-center justify-between text-sm text-slate-500">
+            <span className="tabnum">
+              {desde}–{hasta} de {total}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                className="btn-ghost h-9 disabled:opacity-40"
+                onClick={() => irAPagina(page - 1)}
+                disabled={page <= 0}
+              >
+                <ChevronLeft className="h-4 w-4" /> Anterior
+              </button>
+              <span className="tabnum">{page + 1} / {totalPaginas}</span>
+              <button
+                className="btn-ghost h-9 disabled:opacity-40"
+                onClick={() => irAPagina(page + 1)}
+                disabled={page + 1 >= totalPaginas}
+              >
+                Siguiente <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

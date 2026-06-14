@@ -51,6 +51,12 @@ async function bootstrap(): Promise<void> {
   }
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
+  // Cierre limpio: en cada SIGTERM (redeploy de Hostinger) NestJS corre los
+  // onModuleDestroy → PrismaService.$disconnect() cierra el pool MySQL y
+  // ScheduleModule cancela los @Interval. Sin esto el proceso muere sin soltar
+  // la conexión ni el timer del scheduler.
+  app.enableShutdownHooks();
+
   // Documentación interactiva + contrato. Nunca debe impedir el arranque.
   try {
     SwaggerModule.setup('api/docs', app, construirDocOpenApi(app));

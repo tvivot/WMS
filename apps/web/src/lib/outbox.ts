@@ -140,8 +140,15 @@ export async function sincronizar(): Promise<number> {
   return ok;
 }
 
+let outboxIniciado = false;
+
 /** Engancha reintentos automáticos: al volver online y cada 20s. */
 export function iniciarOutbox(): void {
+  // Idempotente: el outbox es un singleton de por vida (se arranca una vez en
+  // el boot). El guard evita duplicar el listener y el interval ante un HMR en
+  // desarrollo (que volvería a ejecutar este módulo).
+  if (outboxIniciado) return;
+  outboxIniciado = true;
   window.addEventListener('online', () => void sincronizar());
   setInterval(() => {
     if (cantidadPendiente() > 0) void sincronizar();

@@ -24,6 +24,8 @@ export type BuscadorImagen = (sku: string) => Promise<string | null>;
 @Injectable()
 export class WooCommerceService {
   private readonly logger = new Logger(WooCommerceService.name);
+  /** Evita que dos corridas del @Interval se solapen si una tarda de más. */
+  private sincEnCurso = false;
 
   constructor(private readonly catalogo: CatalogoService) {}
 
@@ -49,12 +51,22 @@ export class WooCommerceService {
    */
   @Interval('woo-sync-imagenes', 48 * 60 * 60 * 1000)
   async syncProgramado(): Promise<void> {
-    if (!this.estaConfigurado()) return;
-    const r = await this.sincronizarImagenes();
-    this.logger.log(
-      `Sync imágenes WooCommerce: ${r.actualizados} actualizadas, ` +
-        `${r.sinImagen} sin imagen, ${r.errores.length} errores (de ${r.revisados}).`,
-    );
+    // Guard de reentrancia + try/catch: si una corrida tardara más que el
+    // intervalo no se solapa, y un fallo no queda como promesa rechazada sin
+    // manejar (el callback del @Interval no tiene a quién propagar el error).
+    if (!this.estaConfigurado() || this.sincEnCurso) return;
+    this.sincEnCurso = true;
+    try {
+      const r = await this.sincronizarImagenes();
+      this.logger.log(
+        `Sync imágenes WooCommerce: ${r.actualizados} actualizadas, ` +
+          `${r.sinImagen} sin imagen, ${r.errores.length} errores (de ${r.revisados}).`,
+      );
+    } catch (err) {
+      this.logger.error(`Sync imágenes WooCommerce falló: ${(err as Error).message}`);
+    } finally {
+      this.sincEnCurso = false;
+    }
   }
 
   /** Completa portadas faltantes consultando WooCommerce por SKU = ISBN. */

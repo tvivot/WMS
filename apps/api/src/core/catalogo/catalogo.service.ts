@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -198,18 +199,51 @@ export class CatalogoService {
     return { recibidos: items.length, creados, actualizados, errores };
   }
 
+  /** Longitud mínima de token para FULLTEXT (innodb_ft_min_token_size = 3). */
+  private static readonly FT_MIN = 3;
+
+  /**
+   * Arma una expresión boolean-mode de FULLTEXT desde el texto del usuario:
+   * cada palabra de >= 3 chars se vuelve `+palabra*` (AND + prefijo). Strippea
+   * los operadores boolean-mode (+ - > < ( ) ~ * " @) para no romper la query
+   * ni alterar la semántica (hardening: sanitizar toda entrada). Devuelve null
+   * si no quedó ningún token utilizable → el caller degrada a `contains`.
+   */
+  private exprFulltext(q: string): string | null {
+    const terminos = q
+      .trim()
+      .split(/\s+/)
+      .map((w) => w.replace(/[+\-><()~*"@]/g, ''))
+      .filter((w) => w.length >= CatalogoService.FT_MIN)
+      .map((w) => `+${w}*`);
+    return terminos.length ? terminos.join(' ') : null;
+  }
+
   async listar(params: { q?: string; skip?: number; take?: number }) {
     const take = Math.min(params.take ?? 50, 500);
     const skip = params.skip ?? 0;
-    const where = params.q
-      ? {
-          OR: [
-            { titulo: { contains: params.q } },
-            { codigoInterno: { contains: params.q } },
-            { isbns: { some: { isbn: { contains: params.q } } } },
-          ],
-        }
-      : {};
+    const q = params.q?.trim();
+
+    // Búsqueda indexada (sin full scan):
+    //  - título: FULLTEXT MATCH(titulo) AGAINST(... IN BOOLEAN MODE) por palabra
+    //    con prefijo; si el término es < 3 chars degrada a LIKE (contains).
+    //  - código interno / ISBN: prefijo (startsWith → LIKE 'q%') sobre sus
+    //    índices @unique, sargable, en vez del contains (no indexable) anterior.
+    let where: Prisma.ProductoWhereInput = {};
+    if (q) {
+      const ft = this.exprFulltext(q);
+      const porTitulo: Prisma.ProductoWhereInput = ft
+        ? { titulo: { search: ft } }
+        : { titulo: { contains: q } };
+      where = {
+        OR: [
+          porTitulo,
+          { codigoInterno: { startsWith: q } },
+          { isbns: { some: { isbn: { startsWith: q } } } },
+        ],
+      };
+    }
+
     const [total, items] = await Promise.all([
       this.prisma.producto.count({ where }),
       this.prisma.producto.findMany({

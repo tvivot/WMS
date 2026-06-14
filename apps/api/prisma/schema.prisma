@@ -145,6 +145,11 @@ model Producto {
 
   isbns ProductoIsbn[]
 
+  // Búsqueda del catálogo: FULLTEXT para MATCH por palabra del título y B-tree
+  // para el orderBy titulo (evita filesort en el listado paginado). map:
+  // explícito para que los dos índices sobre `titulo` no choquen de nombre.
+  @@fulltext([titulo], map: "core_producto_titulo_ft")
+  @@index([titulo], map: "core_producto_titulo_idx")
   @@map("core_producto")
 }
 
