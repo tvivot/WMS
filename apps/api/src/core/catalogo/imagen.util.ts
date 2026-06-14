@@ -49,6 +49,11 @@ export async function convertirAWebp(buf: Buffer): Promise<Buffer | null> {
   } catch {
     return null; // sharp no disponible → fallback al original
   }
+  // Cap de concurrencia de libvips: sin esto arma un pool de threads del tamaño
+  // de la cantidad de cores del SERVIDOR FÍSICO (32-128 en hosting compartido),
+  // y Hostinger cuenta cada thread como proceso (límite nproc). Las portadas son
+  // chicas (600px): 1 thread alcanza y evita el pico de procesos.
+  sharp.concurrency(1);
   return sharp(buf)
     .rotate() // respeta orientación EXIF antes de redimensionar
     .resize({ width: 600, withoutEnlargement: true })
