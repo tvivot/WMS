@@ -48,9 +48,9 @@ function crearFakePrisma() {
       { id: 6, nombre: 'Trans Baja', activo: false },
     ] as Fila[],
     productos: [
-      { id: 1, titulo: 'Libro A' },
-      { id: 2, titulo: 'Libro B' },
-      { id: 3, titulo: 'Libro C' },
+      { id: 1, titulo: 'Libro A', editorial: 'Ed A', imagenUrl: '/u/a.webp' },
+      { id: 2, titulo: 'Libro B', editorial: null, imagenUrl: null },
+      { id: 3, titulo: 'Libro C', editorial: 'Ed C', imagenUrl: null },
     ] as Fila[],
   };
 
@@ -196,7 +196,7 @@ const CATALOGO: Record<string, { id: number; titulo: string }> = {
 function crearServicio() {
   const { prisma, db } = crearFakePrisma();
   const resolverUno = (isbn: string) =>
-    CATALOGO[isbn] ? { ...CATALOGO[isbn], codigoInterno: `P-${CATALOGO[isbn].id}`, editorial: null, isbn } : null;
+    CATALOGO[isbn] ? { ...CATALOGO[isbn], codigoInterno: `P-${CATALOGO[isbn].id}`, editorial: null, imagenUrl: null, isbn } : null;
   const catalogo = {
     resolverPorIsbnOpcional: async (isbn: string) => resolverUno(isbn),
     resolverPorIsbnBatch: async (isbns: string[]) => {

@@ -1,5 +1,7 @@
 import { useState, type ReactNode } from 'react';
+import { BookOpen, X } from 'lucide-react';
 import { ESTADO_CLASE, ESTADO_LABEL, type Estado } from '../lib/estados';
+import type { ProductoLite } from '../lib/producto';
 
 export function Spinner({ className = '' }: { className?: string }) {
   return (
@@ -150,6 +152,69 @@ export function EmptyState({ titulo, sub }: { titulo: string; sub?: string }) {
     <div className="text-center py-12 text-slate-500">
       <p className="font-medium text-slate-600">{titulo}</p>
       {sub && <p className="text-sm mt-1">{sub}</p>}
+    </div>
+  );
+}
+
+/** Marcador "sin portada": ícono de libro centrado sobre fondo neutro. */
+function SinPortada({ className = '' }: { className?: string }) {
+  return (
+    <span className={`flex items-center justify-center bg-slate-100 text-slate-300 ${className}`}>
+      <BookOpen className="h-1/2 w-1/2" />
+    </span>
+  );
+}
+
+/**
+ * Miniatura de portada clickeable. Al hacer click abre el popup con la imagen
+ * grande, título, editorial e ISBN. Si no hay imagen muestra un placeholder.
+ */
+export function ProductoThumb({ producto, size = 40 }: { producto: ProductoLite; size?: number }) {
+  const [abierto, setAbierto] = useState(false);
+  const estilo = { width: size, height: Math.round(size * 1.33) };
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setAbierto(true)}
+        title="Ver portada"
+        className="shrink-0 overflow-hidden rounded border border-slate-200 transition hover:border-brand-green-ink hover:shadow"
+        style={estilo}
+      >
+        {producto.imagenUrl ? (
+          <img src={producto.imagenUrl} alt={producto.titulo} className="h-full w-full object-cover" />
+        ) : (
+          <SinPortada className="h-full w-full" />
+        )}
+      </button>
+      {abierto && <ProductoDialog producto={producto} onCerrar={() => setAbierto(false)} />}
+    </>
+  );
+}
+
+/** Popup de producto: portada grande + título, editorial e ISBN. */
+export function ProductoDialog({ producto, onCerrar }: { producto: ProductoLite; onCerrar: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onCerrar}>
+      <div className="card p-5 w-full max-w-sm animate-fade-in" onClick={(e) => e.stopPropagation()}>
+        <div className="flex justify-end -mt-1 -mr-1">
+          <button className="text-slate-400 hover:text-slate-700" onClick={onCerrar} aria-label="Cerrar">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="mx-auto mb-4 w-40 overflow-hidden rounded-lg border border-slate-200" style={{ aspectRatio: '3 / 4' }}>
+          {producto.imagenUrl ? (
+            <img src={producto.imagenUrl} alt={producto.titulo} className="h-full w-full object-cover" />
+          ) : (
+            <SinPortada className="h-full w-full" />
+          )}
+        </div>
+        <h3 className="font-semibold text-center text-slate-900">{producto.titulo}</h3>
+        {producto.editorial && (
+          <p className="text-sm text-slate-500 text-center mt-0.5">{producto.editorial}</p>
+        )}
+        <p className="text-xs text-slate-400 text-center mt-2 tabnum">ISBN {producto.isbn}</p>
+      </div>
     </div>
   );
 }

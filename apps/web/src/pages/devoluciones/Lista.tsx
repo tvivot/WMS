@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { CheckCircle2, Plus } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { api } from '../../lib/api';
@@ -73,6 +73,7 @@ const COLUMNAS: ColumnDef<Autorizacion, unknown>[] = [
 
 export function DevolucionesLista() {
   const { puede, actor } = useAuth();
+  const navigate = useNavigate();
   const [items, setItems] = useState<Autorizacion[] | null>(null);
   const [creando, setCreando] = useState(false);
   const [cliente, setCliente] = useState<ClienteOpcion | null>(null);
@@ -202,7 +203,12 @@ export function DevolucionesLista() {
           sub={filtro ? 'Tocá el indicador de nuevo para quitar el filtro.' : 'Creá una nueva solicitud para empezar.'}
         />
       ) : (
-        <DataGrid data={visibles} columns={columnas} storageKey="devoluciones" />
+        <DataGrid
+          data={visibles}
+          columns={columnas}
+          storageKey="devoluciones"
+          onRowDoubleClick={(row) => navigate(`/devoluciones/${row.id}`)}
+        />
       )}
     </div>
   );

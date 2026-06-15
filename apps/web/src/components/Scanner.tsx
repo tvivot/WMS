@@ -1,10 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { BrowserMultiFormatReader } from '@zxing/browser';
-import { Camera, CameraOff, ScanLine } from 'lucide-react';
+import { BookOpen, Camera, CameraOff, ScanLine } from 'lucide-react';
+import { buscarProductos, type ProductoLite } from '../lib/producto';
 
 interface Props {
   onScan: (codigo: string) => void;
   placeholder?: string;
+  /**
+   * Si se pasa, activa el typeahead de catálogo: al tipear (≥4 caracteres) se
+   * sugieren productos con su portada y, al elegir uno (click o Enter), se llama
+   * a `onElegir` con el producto ya resuelto (sin re-consultar por ISBN).
+   */
+  onElegir?: (p: ProductoLite) => void;
 }
 
 // Tipado mínimo de la API nativa BarcodeDetector (no está en lib.dom).
@@ -21,14 +28,19 @@ declare global {
  * Escáner de ISBN: input manual (sirve también como wedge para lectores USB) +
  * cámara con BarcodeDetector nativo y fallback a ZXing. Debounce anti doble-lectura.
  */
-export function Scanner({ onScan, placeholder = 'Escanear o tipear ISBN…' }: Props) {
+export function Scanner({ onScan, placeholder = 'Escanear o tipear ISBN…', onElegir }: Props) {
   const [manual, setManual] = useState('');
   const [camOn, setCamOn] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sugerencias, setSugerencias] = useState<ProductoLite[]>([]);
+  const [activo, setActivo] = useState(-1);
   const videoRef = useRef<HTMLVideoElement>(null);
   const ultimoRef = useRef<{ code: string; t: number }>({ code: '', t: 0 });
   const vistosRef = useRef<Map<string, number>>(new Map());
   const stopRef = useRef<(() => void) | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const reqRef = useRef(0);
+  const cajaRef = useRef<HTMLDivElement>(null);
 
   const emitir = (code: string) => {
     const limpio = code.trim();
@@ -56,6 +68,72 @@ export function Scanner({ onScan, placeholder = 'Escanear o tipear ISBN…' }: P
     onScan(limpio);
     if (navigator.vibrate) navigator.vibrate(40);
   };
+
+  const cerrarSugerencias = () => {
+    setSugerencias([]);
+    setActivo(-1);
+  };
+
+  const elegir = (p: ProductoLite) => {
+    onElegir?.(p);
+    setManual('');
+    cerrarSugerencias();
+    if (navigator.vibrate) navigator.vibrate(40);
+  };
+
+  // Typeahead: busca productos (con portada) tras 250ms sin tipear, ≥4 chars.
+  // `reqRef` descarta respuestas viejas que llegan fuera de orden.
+  const onCambioManual = (valor: string) => {
+    setManual(valor);
+    if (!onElegir) return;
+    clearTimeout(debounceRef.current);
+    if (valor.trim().length < 4) {
+      cerrarSugerencias();
+      return;
+    }
+    const req = ++reqRef.current;
+    debounceRef.current = setTimeout(() => {
+      buscarProductos(valor)
+        .then((r) => {
+          if (req !== reqRef.current) return; // respuesta obsoleta
+          setSugerencias(r);
+          setActivo(-1);
+        })
+        .catch(() => {
+          if (req === reqRef.current) cerrarSugerencias();
+        });
+    }, 250);
+  };
+
+  const onTeclaManual = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (sugerencias.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActivo((i) => (i + 1) % sugerencias.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActivo((i) => (i <= 0 ? sugerencias.length - 1 : i - 1));
+    } else if (e.key === 'Enter') {
+      // Con el dropdown abierto, Enter carga la sugerencia resaltada (o la 1ª):
+      // gana al submit del form y evita resolver un título como si fuera ISBN.
+      e.preventDefault();
+      elegir(sugerencias[activo >= 0 ? activo : 0]);
+    } else if (e.key === 'Escape') {
+      cerrarSugerencias();
+    }
+  };
+
+  // Cerrar el dropdown al hacer click fuera.
+  useEffect(() => {
+    if (sugerencias.length === 0) return;
+    const cerrar = (e: MouseEvent) => {
+      if (!cajaRef.current?.contains(e.target as Node)) cerrarSugerencias();
+    };
+    document.addEventListener('mousedown', cerrar);
+    return () => document.removeEventListener('mousedown', cerrar);
+  }, [sugerencias.length]);
+
+  useEffect(() => () => clearTimeout(debounceRef.current), []);
 
   useEffect(() => {
     if (!camOn) {
@@ -120,12 +198,13 @@ export function Scanner({ onScan, placeholder = 'Escanear o tipear ISBN…' }: P
   }, [camOn]);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" ref={cajaRef}>
       <form
         onSubmit={(e) => {
           e.preventDefault();
           emitir(manual);
           setManual('');
+          cerrarSugerencias();
         }}
         className="flex gap-2"
       >
@@ -136,10 +215,43 @@ export function Scanner({ onScan, placeholder = 'Escanear o tipear ISBN…' }: P
             autoFocus
             inputMode="numeric"
             value={manual}
-            onChange={(e) => setManual(e.target.value)}
+            onChange={(e) => onCambioManual(e.target.value)}
+            onKeyDown={onTeclaManual}
             placeholder={placeholder}
             className="input pl-10 tabnum"
+            autoComplete="off"
           />
+          {sugerencias.length > 0 && (
+            <ul className="absolute left-0 right-0 top-12 z-30 card p-1 max-h-72 overflow-auto animate-fade-in">
+              {sugerencias.map((s, i) => (
+                <li key={`${s.isbn}-${i}`}>
+                  <button
+                    type="button"
+                    // mousedown (no click): elige antes de que el blur cierre el dropdown
+                    onMouseDown={(e) => { e.preventDefault(); elegir(s); }}
+                    onMouseEnter={() => setActivo(i)}
+                    className={`flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left ${
+                      i === activo ? 'bg-brand-green/10' : 'hover:bg-slate-50'
+                    }`}
+                  >
+                    <span className="flex h-12 w-9 shrink-0 items-center justify-center overflow-hidden rounded border border-slate-200 bg-slate-100">
+                      {s.imagenUrl ? (
+                        <img src={s.imagenUrl} alt={s.titulo} className="h-full w-full object-cover" />
+                      ) : (
+                        <BookOpen className="h-4 w-4 text-slate-300" />
+                      )}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-slate-800">{s.titulo}</span>
+                      <span className="block truncate text-xs text-slate-400 tabnum">
+                        {s.isbn}{s.editorial ? ` · ${s.editorial}` : ''}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
         <button type="submit" className="btn-primary">
           Agregar

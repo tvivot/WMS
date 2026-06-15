@@ -18,6 +18,7 @@ export interface ProductoResuelto {
   codigoInterno: string;
   titulo: string;
   editorial: string | null;
+  imagenUrl: string | null;
   isbn: string;
 }
 
@@ -410,6 +411,7 @@ export class CatalogoService {
       codigoInterno: fila.producto.codigoInterno,
       titulo: fila.producto.titulo,
       editorial: fila.producto.editorial,
+      imagenUrl: fila.producto.imagenUrl,
       isbn,
     };
   }
@@ -453,6 +455,7 @@ export class CatalogoService {
           codigoInterno: f.producto.codigoInterno,
           titulo: f.producto.titulo,
           editorial: f.producto.editorial,
+          imagenUrl: f.producto.imagenUrl,
           isbn: f.isbn,
         },
       ]),

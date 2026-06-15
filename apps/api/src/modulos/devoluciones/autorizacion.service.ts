@@ -575,23 +575,32 @@ export class AutorizacionService {
     const lineas = [...mapa.values()].sort((a, b) => a.isbn.localeCompare(b.isbn));
 
     // Título desde el catálogo (referencia por ID, sin FK).
-    const titulos = await this.titulosPorProducto(
+    const info = await this.infoPorProducto(
       lineas.map((l) => l.productoId).filter((x): x is number => x !== null),
     );
     for (const l of lineas) {
-      l.titulo = l.productoId !== null ? (titulos.get(l.productoId) ?? null) : null;
+      l.titulo = l.productoId !== null ? (info.get(l.productoId)?.titulo ?? null) : null;
     }
     return lineas;
   }
 
-  private async titulosPorProducto(ids: number[]): Promise<Map<number, string>> {
+  /**
+   * Info de catálogo por productoId (referencia por ID, sin FK cruzada): título,
+   * editorial e imagen. La imagen + editorial alimentan la miniatura y el popup
+   * de producto en el front al reabrir una devolución ya cargada.
+   */
+  private async infoPorProducto(
+    ids: number[],
+  ): Promise<Map<number, { titulo: string; editorial: string | null; imagenUrl: string | null }>> {
     const unicos = [...new Set(ids)];
     if (unicos.length === 0) return new Map();
     const productos = await this.prisma.producto.findMany({
       where: { id: { in: unicos } },
-      select: { id: true, titulo: true },
+      select: { id: true, titulo: true, editorial: true, imagenUrl: true },
     });
-    return new Map(productos.map((p) => [p.id, p.titulo]));
+    return new Map(
+      productos.map((p) => [p.id, { titulo: p.titulo, editorial: p.editorial, imagenUrl: p.imagenUrl }]),
+    );
   }
 
   async listar(actor: JwtPayload, params: { estado?: DevEstado; clienteId?: number }) {
@@ -628,7 +637,7 @@ export class AutorizacionService {
     if (!a) throw new NotFoundException('Autorización no encontrada');
 
     // Datos del núcleo resueltos por ID (sin FK): títulos, cliente, transportista.
-    const titulos = await this.titulosPorProducto([
+    const info = await this.infoPorProducto([
       ...a.declaraciones.map((d) => d.productoId).filter((x): x is number => x !== null),
       ...a.bultos.flatMap((b) =>
         b.controles.map((c) => c.productoId).filter((x): x is number => x !== null),
@@ -662,10 +671,15 @@ export class AutorizacionService {
             .then((u) => (u ? { tipo: 'usuario' as const, nombre: u.nombre } : null)),
     ]);
 
-    const conTitulo = <T extends { productoId: number | null }>(x: T) => ({
-      ...x,
-      titulo: x.productoId !== null ? (titulos.get(x.productoId) ?? null) : null,
-    });
+    const conTitulo = <T extends { productoId: number | null }>(x: T) => {
+      const p = x.productoId !== null ? info.get(x.productoId) : undefined;
+      return {
+        ...x,
+        titulo: p?.titulo ?? null,
+        editorial: p?.editorial ?? null,
+        imagenUrl: p?.imagenUrl ?? null,
+      };
+    };
     return {
       ...a,
       cliente,

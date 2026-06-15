@@ -33,7 +33,7 @@ const TAMANOS_PAGINA = [20, 50, 100];
  * por grilla) y, si se pasa `buscar`, filtro de texto global sobre todas
  * las columnas.
  */
-export function DataGrid<T>({ data, columns, storageKey, buscar, paginar = true }: {
+export function DataGrid<T>({ data, columns, storageKey, buscar, paginar = true, onRowDoubleClick }: {
   data: T[];
   columns: ColumnDef<T, unknown>[];
   storageKey?: string;
@@ -41,6 +41,8 @@ export function DataGrid<T>({ data, columns, storageKey, buscar, paginar = true 
   buscar?: string;
   /** Paginación client-side de la grilla. false cuando la vista pagina server-side. */
   paginar?: boolean;
+  /** Doble click en una fila (no se dispara sobre botones/links/inputs de la fila). */
+  onRowDoubleClick?: (row: T) => void;
 }) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState('');
@@ -183,7 +185,20 @@ export function DataGrid<T>({ data, columns, storageKey, buscar, paginar = true 
           </thead>
           <tbody className="divide-y divide-slate-100">
             {table.getRowModel().rows.map((row) => (
-              <tr key={row.id} className="hover:bg-slate-50">
+              <tr
+                key={row.id}
+                className={`hover:bg-slate-50 ${onRowDoubleClick ? 'cursor-pointer select-none' : ''}`}
+                title={onRowDoubleClick ? 'Doble click para abrir' : undefined}
+                onDoubleClick={
+                  onRowDoubleClick
+                    ? (e) => {
+                        // No abrir si el doble click fue sobre un control de la fila.
+                        if ((e.target as HTMLElement).closest('button, a, input, select, label')) return;
+                        onRowDoubleClick(row.original);
+                      }
+                    : undefined
+                }
+              >
                 {row.getVisibleCells().map((cell) => (
                   <td key={cell.id} className="px-4 py-3">
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}

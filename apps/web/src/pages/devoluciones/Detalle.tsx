@@ -5,11 +5,12 @@ import { api } from '../../lib/api';
 import { enviarControl } from '../../lib/outbox';
 import { useAuth } from '../../lib/auth';
 import { PERMISOS, ESTADOS_ORDEN, ESTADO_LABEL, type Estado } from '../../lib/estados';
-import { Card, EstadoBadge, Field, Spinner } from '../../components/ui';
+import { Card, EstadoBadge, Field, ProductoThumb, Spinner } from '../../components/ui';
 import { Scanner } from '../../components/Scanner';
+import type { ProductoLite } from '../../lib/producto';
 
-interface Linea { id: number; isbn: string; cantidad: number; productoId: number | null; titulo: string | null }
-interface Control { id: number; isbn: string; cantidad: number; malEstado: number; titulo: string | null }
+interface Linea { id: number; isbn: string; cantidad: number; productoId: number | null; titulo: string | null; editorial: string | null; imagenUrl: string | null }
+interface Control { id: number; isbn: string; cantidad: number; malEstado: number; titulo: string | null; editorial: string | null; imagenUrl: string | null }
 interface Bulto { id: number; numero: number; peso: string | null; estadoControl: string; controles: Control[] }
 interface Detalle {
   id: number; estado: Estado; clienteId: number; depositoId: number;
@@ -23,8 +24,10 @@ interface Detalle {
 }
 interface TransportistaOpcion { id: number; nombre: string }
 
-interface FilaControl { isbn: string; titulo: string; cantidad: number; malEstado: number }
+interface FilaControl { isbn: string; titulo: string; editorial: string | null; imagenUrl: string | null; cantidad: number; malEstado: number }
 type ResultadoGuardar = { encolado?: true } | void;
+/** Forma que devuelve /catalogo/productos/por-isbn (resolución de un escaneo). */
+type ProductoResuelto = ProductoLite & { id: number; codigoInterno: string };
 
 export function DevolucionDetalle() {
   const { id } = useParams();
@@ -136,9 +139,13 @@ function Stepper({ estado }: { estado: Estado }) {
   );
 }
 
+interface LineaDecl { isbn: string; titulo: string; editorial: string | null; imagenUrl: string | null; cantidad: number }
+
 function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => void; onError: (s: string) => void }) {
-  const [lineas, setLineas] = useState<{ isbn: string; titulo: string; cantidad: number }[]>(
-    d.declaraciones.map((l) => ({ isbn: l.isbn, titulo: l.titulo ?? l.isbn, cantidad: l.cantidad })),
+  const [lineas, setLineas] = useState<LineaDecl[]>(
+    d.declaraciones.map((l) => ({
+      isbn: l.isbn, titulo: l.titulo ?? l.isbn, editorial: l.editorial, imagenUrl: l.imagenUrl, cantidad: l.cantidad,
+    })),
   );
   const [bultos, setBultos] = useState(String(d.bultosDeclarados ?? ''));
   const [peso, setPeso] = useState(String(d.pesoTotalDeclarado ?? ''));
@@ -151,18 +158,24 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
     api.get<TransportistaOpcion[]>('/transportistas').then(setTransportistas).catch(() => setTransportistas([]));
   }, []);
 
+  // Suma una unidad del producto (autosuma si el ISBN ya está en la lista).
+  const sumar = (p: ProductoLite) => {
+    setLineas((prev) => {
+      const i = prev.findIndex((l) => l.isbn === p.isbn);
+      if (i >= 0) {
+        const copy = [...prev];
+        copy[i] = { ...copy[i], cantidad: copy[i].cantidad + 1 };
+        return copy;
+      }
+      return [...prev, { isbn: p.isbn, titulo: p.titulo, editorial: p.editorial, imagenUrl: p.imagenUrl, cantidad: 1 }];
+    });
+  };
+
+  // Escaneo/wedge: resuelve el código por ISBN y suma (trae título + portada).
   const agregar = async (codigo: string) => {
     try {
-      const p = await api.get<{ titulo: string; isbn: string }>(`/catalogo/productos/por-isbn/${codigo}`);
-      setLineas((prev) => {
-        const i = prev.findIndex((l) => l.isbn === p.isbn);
-        if (i >= 0) {
-          const copy = [...prev];
-          copy[i] = { ...copy[i], cantidad: copy[i].cantidad + 1 };
-          return copy;
-        }
-        return [...prev, { isbn: p.isbn, titulo: p.titulo, cantidad: 1 }];
-      });
+      const p = await api.get<ProductoResuelto>(`/catalogo/productos/por-isbn/${codigo}`);
+      sumar(p);
     } catch (e) {
       onError((e as Error).message);
     }
@@ -204,12 +217,15 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
   return (
     <Card>
       <h2 className="font-semibold mb-3">Declarar devolución</h2>
-      <Scanner onScan={agregar} />
+      <Scanner onScan={agregar} onElegir={sumar} />
       <div className="mt-4 space-y-2">
         {lineas.map((l, i) => (
           <div key={l.isbn} className="flex items-center gap-3 text-sm">
-            <span className="tabnum text-slate-400 w-32">{l.isbn}</span>
-            <span className="flex-1 truncate">{l.titulo}</span>
+            <ProductoThumb producto={l} size={36} />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate">{l.titulo}</span>
+              <span className="block truncate text-xs text-slate-400 tabnum">{l.isbn}</span>
+            </span>
             <input
               type="number" min={1} value={l.cantidad}
               onChange={(e) => setLineas((p) => p.map((x, j) => (j === i ? { ...x, cantidad: Number(e.target.value) } : x)))}
@@ -217,7 +233,7 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
             />
           </div>
         ))}
-        {lineas.length === 0 && <p className="text-sm text-slate-400">Escaneá ISBN para sumar líneas.</p>}
+        {lineas.length === 0 && <p className="text-sm text-slate-400">Escaneá o buscá un ISBN para sumar líneas.</p>}
       </div>
       <div className="grid grid-cols-2 gap-3 mt-4">
         <Field label="Bultos"><input className="input tabnum" inputMode="numeric" value={bultos} onChange={(e) => setBultos(e.target.value)} /></Field>
@@ -311,7 +327,7 @@ function PanelControl({ d, onDone, onError }: { d: Detalle; onDone: () => void; 
             </button>
             {activo === b.numero && (
               <ControlBulto
-                inicial={b.controles.map((c) => ({ isbn: c.isbn, titulo: c.titulo ?? c.isbn, cantidad: c.cantidad, malEstado: c.malEstado }))}
+                inicial={b.controles.map((c) => ({ isbn: c.isbn, titulo: c.titulo ?? c.isbn, editorial: c.editorial, imagenUrl: c.imagenUrl, cantidad: c.cantidad, malEstado: c.malEstado }))}
                 pesoInicial={b.peso ?? ''}
                 etiqueta="Marcar controlado"
                 onGuardar={(payload) => enviarControl(d.id, b.numero, payload)}
@@ -356,14 +372,18 @@ function ControlBulto({ inicial, pesoInicial, etiqueta, onGuardar, onDone, onErr
   const [peso, setPeso] = useState(pesoInicial ?? '');
   const [encolado, setEncolado] = useState(false);
 
+  const sumar = (p: ProductoLite) => {
+    setFilas((prev) => {
+      const i = prev.findIndex((f) => f.isbn === p.isbn);
+      if (i >= 0) { const c = [...prev]; c[i] = { ...c[i], cantidad: c[i].cantidad + 1 }; return c; }
+      return [...prev, { isbn: p.isbn, titulo: p.titulo, editorial: p.editorial, imagenUrl: p.imagenUrl, cantidad: 1, malEstado: 0 }];
+    });
+  };
+
   const agregar = async (codigo: string) => {
     try {
-      const p = await api.get<{ titulo: string; isbn: string }>(`/catalogo/productos/por-isbn/${codigo}`);
-      setFilas((prev) => {
-        const i = prev.findIndex((f) => f.isbn === p.isbn);
-        if (i >= 0) { const c = [...prev]; c[i] = { ...c[i], cantidad: c[i].cantidad + 1 }; return c; }
-        return [...prev, { isbn: p.isbn, titulo: p.titulo, cantidad: 1, malEstado: 0 }];
-      });
+      const p = await api.get<ProductoResuelto>(`/catalogo/productos/por-isbn/${codigo}`);
+      sumar(p);
     } catch (e) { onError((e as Error).message); }
   };
 
@@ -384,10 +404,11 @@ function ControlBulto({ inicial, pesoInicial, etiqueta, onGuardar, onDone, onErr
 
   return (
     <div className="mt-2 p-4 bg-slate-50 rounded-lg space-y-3 animate-fade-in">
-      <Scanner onScan={agregar} placeholder="Escanear contenido del bulto…" />
+      <Scanner onScan={agregar} onElegir={sumar} placeholder="Escanear contenido del bulto…" />
       {filas.map((f, i) => (
         <div key={f.isbn} className="flex items-center gap-2 text-sm">
-          <span className="flex-1 truncate">{f.titulo}</span>
+          <ProductoThumb producto={f} size={32} />
+          <span className="min-w-0 flex-1 truncate">{f.titulo}</span>
           <label className="text-xs text-slate-400">cant</label>
           <input type="number" min={0} value={f.cantidad} onChange={(e) => setFilas((p) => p.map((x, j) => j === i ? { ...x, cantidad: Number(e.target.value) } : x))} className="input w-16 h-9 tabnum text-center" />
           <label className="text-xs text-red-400">mal</label>
@@ -437,7 +458,7 @@ function PanelCorreccion({ d, onDone, onError }: { d: Detalle; onDone: () => voi
             </button>
             {activo === b.numero && (
               <ControlBulto
-                inicial={b.controles.map((c) => ({ isbn: c.isbn, titulo: c.titulo ?? c.isbn, cantidad: c.cantidad, malEstado: c.malEstado }))}
+                inicial={b.controles.map((c) => ({ isbn: c.isbn, titulo: c.titulo ?? c.isbn, editorial: c.editorial, imagenUrl: c.imagenUrl, cantidad: c.cantidad, malEstado: c.malEstado }))}
                 pesoInicial={b.peso ?? ''}
                 etiqueta="Guardar corrección"
                 onGuardar={(payload) =>
