@@ -37,11 +37,12 @@ export function AyudaBoton() {
     <>
       <button
         onClick={() => setAbierto(true)}
-        className="p-2 rounded-lg hover:bg-white/10 text-white/80 hover:text-white transition-colors"
+        className="inline-flex items-center gap-1.5 rounded-lg px-2 sm:px-3 h-9 bg-white/10 hover:bg-white/20 text-white/90 hover:text-white ring-1 ring-inset ring-white/15 transition-colors"
         aria-label="Ayuda de esta pantalla"
         title="Ayuda: cómo usar esta pantalla"
       >
         <HelpCircle className="h-5 w-5" />
+        <span className="hidden lg:inline text-sm font-medium">Ayuda</span>
       </button>
 
       {abierto && (

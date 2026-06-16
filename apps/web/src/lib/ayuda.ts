@@ -333,6 +333,36 @@ const AYUDA_ROLES: AyudaPantalla = {
   ],
 };
 
+const AYUDA_CONFIGURACION: AyudaPantalla = {
+  titulo: 'Configuración',
+  intro:
+    'Acá se administran las integraciones del WMS con sistemas externos y algunas tareas de mantenimiento. Es una pantalla de uso ocasional, pensada para el Administrador.',
+  secciones: [
+    {
+      titulo: 'Portadas desde WooCommerce (imágenes de los libros)',
+      parrafos: [
+        'El sistema completa solo la portada de los productos que no tienen imagen, buscándola en la tienda WooCommerce por el código del libro (SKU = ISBN). Tener portada ayuda a reconocer el libro de un vistazo al escanear y controlar.',
+        'Esta sincronización corre sola en el servidor cada 48 horas. Desde acá podés forzar una corrida manual si necesitás las imágenes ya.',
+      ],
+    },
+    {
+      titulo: 'Cómo forzar una actualización de portadas',
+      pasos: [
+        'Tocá "Actualizar portadas ahora".',
+        'Esperá a que termine: procesa hasta 200 productos por corrida y al final muestra cuántas portadas actualizó, cuántas revisó y cuántas quedaron sin imagen.',
+        'Si dice "No hay productos pendientes de portada", está todo al día.',
+      ],
+    },
+    {
+      titulo: 'Si dice "No configurado" o "Faltan variables de entorno"',
+      parrafos: [
+        'Significa que faltan cargar en el servidor las credenciales de la tienda (WOO_URL, WOO_KEY y WOO_SECRET). Hasta que estén, el botón queda deshabilitado.',
+        'Esto lo resuelve quien administra el servidor: se cargan las tres variables en Hostinger (hPanel → Variables de entorno) y se reinicia/redeploya la app, porque los cambios de entorno recién toman efecto al reiniciar.',
+      ],
+    },
+  ],
+};
+
 const POR_RUTA: { prefijo: string; ayuda: AyudaPantalla }[] = [
   { prefijo: '/devoluciones/', ayuda: AYUDA_DETALLE },
   { prefijo: '/devoluciones', ayuda: AYUDA_LISTA },
@@ -342,6 +372,7 @@ const POR_RUTA: { prefijo: string; ayuda: AyudaPantalla }[] = [
   { prefijo: '/transportistas', ayuda: AYUDA_TRANSPORTISTAS },
   { prefijo: '/usuarios', ayuda: AYUDA_USUARIOS },
   { prefijo: '/roles', ayuda: AYUDA_ROLES },
+  { prefijo: '/configuracion', ayuda: AYUDA_CONFIGURACION },
 ];
 
 /**
