@@ -15,12 +15,13 @@ export default {
           gray: '#54595F', //       --e-global-color-secondary
           'gray-text': '#7A7A7A', // --e-global-color-text
         },
-        // Shell (topbar/sidebar/login): rampa del azul profundo de marca (#334F98). Logo blanco encima.
+        // Shell (topbar/sidebar/login): rampa centrada en el navy REAL de marca (#334F98),
+        // el mismo tono del header del sitio grupaldistribuidora.com.ar. Logo blanco encima.
         shell: {
-          900: '#16224A',
-          800: '#1F2E63',
-          700: '#28407F',
-          600: '#334F98',
+          900: '#334F98', // navy de marca → chrome (header, login, panel de ayuda)
+          800: '#2B4381', // un punto más profundo → botones primarios / chips sólidos
+          700: '#3D5FB6', // más claro → hover de botón (feedback)
+          600: '#5072C4', // el más claro → fills/acentos decorativos
         },
       },
       fontFamily: {
