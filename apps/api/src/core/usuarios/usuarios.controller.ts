@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Post, Put, Query } from '@nestjs/common';
-import { RequierePermiso } from '../auth/decoradores';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Put, Query } from '@nestjs/common';
+import { Actor, RequierePermiso } from '../auth/decoradores';
+import type { JwtPayload } from '../auth/jwt-payload';
 import { PERMISOS } from '../auth/permisos';
 import { UsuariosService } from './usuarios.service';
 import { CrearUsuarioDto, EditarUsuarioDto, ResetClaveDto } from './dto';
@@ -33,5 +34,10 @@ export class UsuariosController {
   @Post(':id/reset-clave')
   reset(@Param('id', ParseIntPipe) id: number, @Body() dto: ResetClaveDto) {
     return this.svc.resetClave(id, dto.clave);
+  }
+
+  @Delete(':id')
+  eliminar(@Param('id', ParseIntPipe) id: number, @Actor() actor: JwtPayload) {
+    return this.svc.eliminar(id, actor.sub);
   }
 }

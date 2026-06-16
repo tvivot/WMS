@@ -75,17 +75,24 @@ export class SeedService implements OnApplicationBootstrap {
       const existente = await this.prisma.rol.findUnique({
         where: { nombre: rolDef.nombre },
       });
-      if (existente) continue; // Ya existe: NO tocar sus permisos (los maneja el ABM).
+      const rol =
+        existente ??
+        (await this.prisma.rol.create({
+          data: { nombre: rolDef.nombre, descripcion: rolDef.descripcion },
+        }));
 
-      const rol = await this.prisma.rol.create({
-        data: { nombre: rolDef.nombre, descripcion: rolDef.descripcion },
-      });
-      // Solo al CREAR el rol se aplican los permisos por defecto.
+      // Auto-reparador ADITIVO: garantiza que el rol por defecto tenga AL MENOS
+      // sus permisos base. Solo agrega los que falten (upsert); NUNCA borra los
+      // que el Administrador haya sumado vía ABM. Así, si un rol perdió un
+      // permiso base (p. ej. una edición que lo desmarcó), vuelve solo en el
+      // próximo arranque, sin pisar las personalizaciones del ABM.
       for (const codigo of rolDef.permisos) {
         const permiso = await this.prisma.permiso.findUnique({ where: { codigo } });
         if (!permiso) continue;
-        await this.prisma.rolPermiso.create({
-          data: { rolId: rol.id, permisoId: permiso.id },
+        await this.prisma.rolPermiso.upsert({
+          where: { rolId_permisoId: { rolId: rol.id, permisoId: permiso.id } },
+          update: {},
+          create: { rolId: rol.id, permisoId: permiso.id },
         });
       }
     }

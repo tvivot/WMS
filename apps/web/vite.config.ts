@@ -31,15 +31,14 @@ export default defineConfig({
         start_url: '/',
         background_color: '#ffffff',
         theme_color: '#334F98',
+        // 'any' y 'maskable' van como entradas SEPARADAS: el maskable lleva margen
+        // de seguridad (la G ocupa ~56%) para que Android no recorte el logo al
+        // aplicar su forma adaptativa. El 'any' lleva la G grande (~72%).
         icons: [
-          { src: '/brand/icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: '/brand/icon-512.png', sizes: '512x512', type: 'image/png' },
-          {
-            src: '/brand/icon-512.png',
-            sizes: '512x512',
-            type: 'image/png',
-            purpose: 'any maskable',
-          },
+          { src: '/brand/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: '/brand/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: '/brand/icon-maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+          { src: '/brand/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
     }),

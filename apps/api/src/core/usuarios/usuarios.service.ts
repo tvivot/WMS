@@ -85,6 +85,17 @@ export class UsuariosService {
     return this.mapear(u);
   }
 
+  /** Elimina un usuario. No permite que el actor se elimine a sí mismo. */
+  async eliminar(id: number, actorId: number) {
+    if (id === actorId) {
+      throw new BadRequestException('No podés eliminar tu propio usuario');
+    }
+    await this.obtener(id);
+    // core_usuario_rol tiene onDelete: Cascade → se limpian los roles solos.
+    await this.prisma.usuario.delete({ where: { id } });
+    return { id };
+  }
+
   async obtener(id: number) {
     const u = await this.prisma.usuario.findUnique({
       where: { id },

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { KeyRound, Plus } from 'lucide-react';
+import { KeyRound, Pencil, Plus, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { Card, ClaveDialog, CredencialAlert, EmptyState, Field, Spinner } from '../components/ui';
 
@@ -9,13 +9,17 @@ interface Usuario {
   activo: boolean; primerIngreso: boolean; roles: Rol[];
 }
 
+const FORM_VACIO = { username: '', nombre: '', email: '', rolIds: [] as number[], clave: '' };
+
 export function Usuarios() {
   const [items, setItems] = useState<Usuario[] | null>(null);
   const [roles, setRoles] = useState<Rol[]>([]);
-  const [creando, setCreando] = useState(false);
-  const [form, setForm] = useState({ username: '', nombre: '', email: '', rolIds: [] as number[], clave: '' });
+  const [panel, setPanel] = useState(false);
+  const [editando, setEditando] = useState<Usuario | null>(null);
+  const [form, setForm] = useState(FORM_VACIO);
   const [cred, setCred] = useState<{ titulo: string; clave: string } | null>(null);
   const [reseteando, setReseteando] = useState<Usuario | null>(null);
+  const [eliminando, setEliminando] = useState<Usuario | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const cargar = () => {
@@ -33,21 +37,50 @@ export function Usuarios() {
       rolIds: f.rolIds.includes(id) ? f.rolIds.filter((x) => x !== id) : [...f.rolIds, id],
     }));
 
-  const crear = async (e: React.FormEvent) => {
+  const abrirCrear = () => {
+    setEditando(null);
+    setForm(FORM_VACIO);
+    setError(null);
+    setPanel((v) => !v);
+  };
+
+  const abrirEditar = (u: Usuario) => {
+    setEditando(u);
+    setForm({ username: u.username, nombre: u.nombre, email: u.email ?? '', rolIds: u.roles.map((r) => r.id), clave: '' });
+    setError(null);
+    setPanel(true);
+  };
+
+  const cerrarPanel = () => {
+    setPanel(false);
+    setEditando(null);
+    setForm(FORM_VACIO);
+  };
+
+  const enviar = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     try {
-      const r = await api.post<Usuario & { claveGenerada: string }>('/usuarios', {
-        username: form.username,
-        nombre: form.nombre,
-        email: form.email || undefined,
-        rolIds: form.rolIds,
-        clave: form.clave.trim() || undefined,
-      });
-      setCred({ titulo: `Usuario ${r.username} — clave de acceso`, clave: r.claveGenerada });
-      setForm({ username: '', nombre: '', email: '', rolIds: [], clave: '' });
-      setCreando(false);
-      cargar();
+      if (editando) {
+        await api.put(`/usuarios/${editando.id}`, {
+          nombre: form.nombre,
+          email: form.email || null,
+          rolIds: form.rolIds,
+        });
+        cerrarPanel();
+        cargar();
+      } else {
+        const r = await api.post<Usuario & { claveGenerada: string }>('/usuarios', {
+          username: form.username,
+          nombre: form.nombre,
+          email: form.email || undefined,
+          rolIds: form.rolIds,
+          clave: form.clave.trim() || undefined,
+        });
+        setCred({ titulo: `Usuario ${r.username} — clave de acceso`, clave: r.claveGenerada });
+        cerrarPanel();
+        cargar();
+      }
     } catch (err) {
       setError((err as Error).message);
     }
@@ -60,6 +93,12 @@ export function Usuarios() {
     cargar();
   };
 
+  const eliminar = async (u: Usuario) => {
+    await api.delete(`/usuarios/${u.id}`);
+    setEliminando(null);
+    cargar();
+  };
+
   const toggleActivo = async (u: Usuario) => {
     await api.put(`/usuarios/${u.id}`, { activo: !u.activo });
     cargar();
@@ -69,24 +108,29 @@ export function Usuarios() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">Usuarios</h1>
-        <button className="btn-primary" onClick={() => setCreando((v) => !v)}>
+        <button className="btn-primary" onClick={abrirCrear}>
           <Plus className="h-4 w-4" /> Usuario
         </button>
       </div>
 
       {cred && <CredencialAlert titulo={cred.titulo} clave={cred.clave} onCerrar={() => setCred(null)} />}
 
-      {creando && (
+      {panel && (
         <Card>
-          <form onSubmit={crear} className="space-y-3">
+          <form onSubmit={enviar} className="space-y-3">
+            <h2 className="font-semibold">{editando ? `Editar ${editando.username}` : 'Nuevo usuario'}</h2>
             <div className="grid sm:grid-cols-3 gap-3">
-              <Field label="Usuario"><input className="input" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required /></Field>
+              <Field label="Usuario">
+                <input className="input disabled:bg-slate-100 disabled:text-slate-500" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required disabled={!!editando} />
+              </Field>
               <Field label="Nombre"><input className="input" value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} required /></Field>
               <Field label="Email"><input className="input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
             </div>
-            <Field label="Clave (opcional)" hint="Vacío = se genera automática. Si la escribís, queda definitiva (mín. 8 caracteres).">
-              <input className="input sm:w-80" value={form.clave} minLength={8} onChange={(e) => setForm({ ...form, clave: e.target.value })} placeholder="Generar automática" />
-            </Field>
+            {!editando && (
+              <Field label="Clave (opcional)" hint="Vacío = se genera automática. Si la escribís, queda definitiva (mín. 8 caracteres).">
+                <input className="input sm:w-80" value={form.clave} minLength={8} onChange={(e) => setForm({ ...form, clave: e.target.value })} placeholder="Generar automática" />
+              </Field>
+            )}
             <div>
               <label className="label">Roles</label>
               <div className="flex flex-wrap gap-2">
@@ -106,7 +150,10 @@ export function Usuarios() {
                 ))}
               </div>
             </div>
-            <button className="btn-accent" type="submit">Crear usuario</button>
+            <div className="flex gap-2">
+              <button className="btn-accent" type="submit">{editando ? 'Guardar cambios' : 'Crear usuario'}</button>
+              <button className="btn-ghost" type="button" onClick={cerrarPanel}>Cancelar</button>
+            </div>
             {error && <p className="text-sm text-red-600">{error}</p>}
           </form>
         </Card>
@@ -140,10 +187,18 @@ export function Usuarios() {
                       {u.activo ? 'Activo' : 'Inactivo'}
                     </button>
                   </td>
-                  <td className="px-4 py-3 text-right">
-                    <button className="btn-ghost h-9" onClick={() => setReseteando(u)} title="Asignar nueva clave">
-                      <KeyRound className="h-4 w-4" /> Clave
-                    </button>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center justify-end gap-1">
+                      <button className="btn-ghost h-9" onClick={() => abrirEditar(u)} title="Editar usuario y roles">
+                        <Pencil className="h-4 w-4" /> Editar
+                      </button>
+                      <button className="btn-ghost h-9" onClick={() => setReseteando(u)} title="Asignar nueva clave">
+                        <KeyRound className="h-4 w-4" /> Clave
+                      </button>
+                      <button className="btn-ghost h-9 text-red-600 hover:bg-red-50" onClick={() => setEliminando(u)} title="Eliminar usuario">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -159,6 +214,56 @@ export function Usuarios() {
           onConfirmar={(clave) => reset(reseteando, clave)}
         />
       )}
+
+      {eliminando && (
+        <ConfirmarEliminar
+          usuario={eliminando}
+          onCerrar={() => setEliminando(null)}
+          onConfirmar={() => eliminar(eliminando)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ConfirmarEliminar({
+  usuario,
+  onCerrar,
+  onConfirmar,
+}: {
+  usuario: Usuario;
+  onCerrar: () => void;
+  onConfirmar: () => Promise<void>;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [enviando, setEnviando] = useState(false);
+
+  const confirmar = async () => {
+    setError(null);
+    setEnviando(true);
+    try {
+      await onConfirmar();
+    } catch (e) {
+      setError((e as Error).message);
+      setEnviando(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onCerrar}>
+      <div className="card p-5 w-full max-w-md animate-fade-in" onClick={(e) => e.stopPropagation()}>
+        <h2 className="font-semibold mb-1">Eliminar usuario</h2>
+        <p className="text-sm text-slate-600">
+          Vas a eliminar a <strong>{usuario.username}</strong> ({usuario.nombre}). Esta acción no se puede deshacer.
+        </p>
+        {error && <p className="text-sm text-red-600 mt-2" role="alert">{error}</p>}
+        <div className="flex justify-end gap-2 mt-4">
+          <button className="btn-ghost h-9" onClick={onCerrar} disabled={enviando}>Cancelar</button>
+          <button className="btn-accent h-9 bg-red-600 hover:bg-red-700 disabled:opacity-50" onClick={confirmar} disabled={enviando}>
+            Eliminar
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
