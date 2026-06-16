@@ -65,7 +65,7 @@ export function AppShell() {
             WMS · Devoluciones
           </span>
 
-          <nav className="hidden md:flex items-center gap-1 ml-6">
+          <nav className="hidden md:flex items-center gap-1 ml-6 font-display">
             {visibles.map((i) => (
               <NavLink
                 key={i.to}
@@ -102,7 +102,7 @@ export function AppShell() {
         </div>
 
         {abierto && (
-          <nav className="md:hidden border-t border-white/10 px-4 py-2 space-y-1">
+          <nav className="md:hidden border-t border-white/10 px-4 py-2 space-y-1 font-display">
             {visibles.map((i) => (
               <NavLink
                 key={i.to}

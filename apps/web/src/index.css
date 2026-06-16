@@ -10,6 +10,15 @@
     @apply bg-slate-50 text-slate-900 font-sans antialiased;
     margin: 0;
   }
+  /* Títulos en Jost, igual que el sitio de Grupal (header/títulos = Jost, cuerpo = Fira Sans). */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-display;
+  }
   /* Cifras tabulares para columnas de datos/cantidades. */
   .tabnum {
     font-variant-numeric: tabular-nums;

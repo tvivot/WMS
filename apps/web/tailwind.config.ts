@@ -5,24 +5,28 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Marca Grupal (extraída del sitio) + shell oscuro para el logo blanco.
+        // Paleta REAL del sitio grupaldistribuidora.com.ar (kit Elementor).
         brand: {
-          blue: '#6EC1E4',
-          'blue-ink': '#2A93C4',
-          green: '#61CE70',
-          'green-ink': '#2FA64A',
-          gray: '#54595F',
+          blue: '#6EC1E4', //       --e-global-color-primary  (celeste, fills/acentos)
+          'blue-ink': '#1E7BA8', // celeste oscurecido → contraste AA para texto/links/focus sobre blanco
+          green: '#61CE70', //      --e-global-color-accent   (verde, indicadores/fills)
+          'green-ink': '#16803C', // verde oscurecido → contraste AA para botón con texto blanco
+          navy: '#334F98', //       azul profundo de marca (íconos sociales / color custom del kit)
+          gray: '#54595F', //       --e-global-color-secondary
+          'gray-text': '#7A7A7A', // --e-global-color-text
         },
-        // Shell oscuro (topbar/sidebar) — Swiss/minimal.
+        // Shell (topbar/sidebar/login): rampa del azul profundo de marca (#334F98). Logo blanco encima.
         shell: {
-          900: '#0F141A',
-          800: '#161D26',
-          700: '#1F2935',
-          600: '#2A3744',
+          900: '#16224A',
+          800: '#1F2E63',
+          700: '#28407F',
+          600: '#334F98',
         },
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
+        // Cuerpo = Fira Sans (fuente real del sitio); títulos/nav = Jost (la del header de Grupal).
+        sans: ['"Fira Sans"', 'system-ui', 'sans-serif'],
+        display: ['Jost', '"Fira Sans"', 'system-ui', 'sans-serif'],
         mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
       },
       boxShadow: {
