@@ -54,6 +54,7 @@ describe('Seam UbicacionResolverPort en Devoluciones', () => {
       { registrar: jest.fn() } as never, // auditoria
       { emit: jest.fn() } as never, // eventos
       new FakeUbicacionesAdapter(), // ← puerto FALSO de Ubicaciones
+      { cargarSaldos: jest.fn(), saldosDe: jest.fn() } as never, // consignación (no usado en ingreso)
     );
   });
 

@@ -34,6 +34,10 @@ import {
   type TipoUbicacion,
   type UbicacionResolverPort,
 } from './puertos/ubicacion-resolver.port';
+import {
+  CONSIGNACION_PORT,
+  type ConsignacionPort,
+} from './puertos/consignacion.port';
 
 const PESO_TOLERANCIA = 0.001;
 
@@ -46,6 +50,8 @@ export class AutorizacionService {
     private readonly eventos: EventEmitter2,
     @Inject(UBICACION_RESOLVER)
     private readonly ubicaciones: UbicacionResolverPort,
+    @Inject(CONSIGNACION_PORT)
+    private readonly consignacion: ConsignacionPort,
   ) {}
 
   // ---- helpers ----
@@ -457,7 +463,19 @@ export class AutorizacionService {
       );
     }
 
-    const reconciliacion = await this.calcularReconciliacion(id);
+    const reconciliacion = await this.calcularReconciliacion(id, a.clienteId);
+
+    // Exceso de consignación (recibido > saldo del ERP): no bloquea, exige
+    // observación propia del cierre (mismo criterio que la diferencia de peso).
+    if (reconciliacion.some((l) => l.excedeConsignacion) && !dto.observaciones) {
+      const excedidos = reconciliacion
+        .filter((l) => l.excedeConsignacion)
+        .map((l) => l.isbn)
+        .join(', ');
+      throw new BadRequestException(
+        `Hay devoluciones que exceden el saldo en consignación (${excedidos}): observación obligatoria`,
+      );
+    }
 
     const actualizada = await this.transicionar(
       id,
@@ -534,7 +552,7 @@ export class AutorizacionService {
       detalle: { lineas: filas.length, observaciones: dto.observaciones ?? null },
     });
 
-    const reconciliacion = await this.calcularReconciliacion(id);
+    const reconciliacion = await this.calcularReconciliacion(id, a.clienteId);
     const ev: DevolucionProcesadaEvent = {
       autorizacionId: id,
       clienteId: a.clienteId,
@@ -563,11 +581,19 @@ export class AutorizacionService {
   async reconciliacionAutorizada(actor: JwtPayload, id: number) {
     const a = await this.obtenerOr404(id);
     this.verificarPropiedad(actor, a.clienteId);
-    return this.calcularReconciliacion(id);
+    return this.calcularReconciliacion(id, a.clienteId);
   }
 
-  /** Reconciliación declarado vs recibido por ISBN (agrega sobre todos los bultos). */
-  async calcularReconciliacion(id: number): Promise<ReconciliacionLinea[]> {
+  /**
+   * Reconciliación declarado vs recibido por ISBN (agrega sobre todos los
+   * bultos) + saldo en consignación del cliente. `excedeConsignacion` marca
+   * (no bloquea) cuando se recibió más de lo que el cliente tenía en
+   * consignación; saldo null = sin dato del ERP (nunca marca exceso).
+   */
+  async calcularReconciliacion(
+    id: number,
+    clienteId: number,
+  ): Promise<ReconciliacionLinea[]> {
     const [declaraciones, bultos] = await Promise.all([
       this.prisma.devDeclaracion.findMany({ where: { autorizacionId: id } }),
       this.prisma.devBulto.findMany({
@@ -580,7 +606,17 @@ export class AutorizacionService {
     const get = (isbn: string, productoId: number | null): ReconciliacionLinea => {
       let l = mapa.get(isbn);
       if (!l) {
-        l = { isbn, productoId, titulo: null, declarado: 0, recibido: 0, bueno: 0, malo: 0 };
+        l = {
+          isbn,
+          productoId,
+          titulo: null,
+          declarado: 0,
+          recibido: 0,
+          bueno: 0,
+          malo: 0,
+          saldoConsignacion: null,
+          excedeConsignacion: false,
+        };
         mapa.set(isbn, l);
       }
       if (l.productoId === null && productoId !== null) l.productoId = productoId;
@@ -599,6 +635,18 @@ export class AutorizacionService {
       }
     }
     const lineas = [...mapa.values()].sort((a, b) => a.isbn.localeCompare(b.isbn));
+
+    // Saldo en consignación por ISBN (lookup batch, sin N+1). Ausencia de dato
+    // → null y nunca marca exceso.
+    const saldos = await this.consignacion.saldosDe(
+      clienteId,
+      lineas.map((l) => l.isbn),
+    );
+    for (const l of lineas) {
+      const saldo = saldos.get(l.isbn);
+      l.saldoConsignacion = saldo ?? null;
+      l.excedeConsignacion = saldo !== undefined && l.recibido > saldo;
+    }
 
     // Título desde el catálogo (referencia por ID, sin FK).
     const info = await this.infoPorProducto(

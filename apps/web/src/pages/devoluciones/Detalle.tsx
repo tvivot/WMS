@@ -480,9 +480,12 @@ function PanelCorreccion({ d, onDone, onError }: { d: Detalle; onDone: () => voi
   );
 }
 
+type LineaRec = { isbn: string; titulo: string | null; declarado: number; recibido: number; bueno: number; malo: number; saldoConsignacion: number | null; excedeConsignacion: boolean };
+
 function PanelReconciliacion({ id, d }: { id: number; d: Detalle }) {
-  const [rec, setRec] = useState<{ isbn: string; titulo: string | null; declarado: number; recibido: number; bueno: number; malo: number }[] | null>(null);
-  useEffect(() => { api.get<typeof rec>(`/devoluciones/autorizaciones/${id}/reconciliacion`).then(setRec).catch(() => setRec([])); }, [id]);
+  const [rec, setRec] = useState<LineaRec[] | null>(null);
+  useEffect(() => { api.get<LineaRec[]>(`/devoluciones/autorizaciones/${id}/reconciliacion`).then(setRec).catch(() => setRec([])); }, [id]);
+  const hayExceso = rec?.some((r) => r.excedeConsignacion);
   return (
     <Card>
       <h2 className="font-semibold mb-1 flex items-center gap-2 text-emerald-700"><CheckCircle2 className="h-5 w-5" /> Procesado</h2>
@@ -490,22 +493,31 @@ function PanelReconciliacion({ id, d }: { id: number; d: Detalle }) {
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="text-slate-500 text-left"><tr>
-            <th className="py-2 font-medium">Título</th><th className="font-medium">ISBN</th><th className="font-medium text-right">Decl.</th><th className="font-medium text-right">Recib.</th><th className="font-medium text-right">Bueno</th><th className="font-medium text-right">Malo</th>
+            <th className="py-2 font-medium">Título</th><th className="font-medium">ISBN</th><th className="font-medium text-right">Decl.</th><th className="font-medium text-right">Recib.</th><th className="font-medium text-right">Bueno</th><th className="font-medium text-right">Malo</th><th className="font-medium text-right">Consig.</th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100">
             {rec?.map((r) => (
-              <tr key={r.isbn}>
+              <tr key={r.isbn} className={r.excedeConsignacion ? 'bg-amber-50' : undefined}>
                 <td className="py-2 pr-2 max-w-48 truncate">{r.titulo ?? '—'}</td>
                 <td className="tabnum text-slate-500">{r.isbn}</td>
                 <td className="text-right tabnum">{r.declarado}</td>
                 <td className="text-right tabnum">{r.recibido}</td>
                 <td className="text-right tabnum text-emerald-700 font-semibold">{r.bueno}</td>
                 <td className="text-right tabnum text-red-600 font-semibold">{r.malo}</td>
+                <td className="text-right tabnum">
+                  {r.saldoConsignacion ?? '—'}
+                  {r.excedeConsignacion && (
+                    <span className="ml-1 inline-flex items-center rounded bg-amber-100 px-1 text-[10px] font-semibold text-amber-700" title="La devolución excede el saldo en consignación">excede</span>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      {hayExceso && (
+        <p className="mt-3 text-xs text-amber-700">Hay títulos cuya cantidad recibida supera el saldo en consignación del cliente (ver observaciones).</p>
+      )}
     </Card>
   );
 }

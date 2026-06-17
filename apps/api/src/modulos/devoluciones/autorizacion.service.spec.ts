@@ -220,14 +220,34 @@ function crearServicio() {
       this.emitidos.push([nombre, payload]);
     },
   };
+  // Fake del puerto de consignación (espejo del UbicacionResolver falso): mapa
+  // en memoria clienteId|isbn → cantidad. Se siembra con consignacion.set().
+  const consignacion = {
+    saldos: new Map<string, number>(),
+    set(clienteId: number, isbn: string, cantidad: number) {
+      this.saldos.set(`${clienteId}|${isbn}`, cantidad);
+    },
+    async cargarSaldos() {
+      return { recibidos: 0, clientes: 0, upserts: 0, clientesDesconocidos: [], errores: [] };
+    },
+    async saldosDe(clienteId: number, isbns: string[]) {
+      const m = new Map<string, number>();
+      for (const isbn of isbns) {
+        const v = this.saldos.get(`${clienteId}|${isbn}`);
+        if (v !== undefined) m.set(isbn, v);
+      }
+      return m;
+    },
+  };
   const svc = new AutorizacionService(
     prisma as never,
     catalogo as never,
     auditoria as never,
     eventos as never,
     new TextFreeUbicacionResolverAdapter(),
+    consignacion as never,
   );
-  return { svc, db, auditoria, eventos };
+  return { svc, db, auditoria, eventos, consignacion };
 }
 
 /** Lleva una autorización nueva hasta el estado pedido (camino feliz). */
@@ -517,11 +537,11 @@ describe('AutorizacionService — circuito completo (criterio de validación)', 
 
     // Reconciliación por ISBN sobre TODOS los bultos (B estaba mezclado en 2).
     // Orden: por ISBN ascendente (C < A < B numéricamente).
-    const rec = await ctx.svc.calcularReconciliacion(id);
+    const rec = await ctx.svc.calcularReconciliacion(id, 10);
     expect(rec).toEqual([
-      { isbn: ISBN_C, productoId: 3, titulo: 'Libro C', declarado: 5, recibido: 5, bueno: 4, malo: 1 },
-      { isbn: ISBN_A, productoId: 1, titulo: 'Libro A', declarado: 2, recibido: 2, bueno: 2, malo: 0 },
-      { isbn: ISBN_B, productoId: 2, titulo: 'Libro B', declarado: 3, recibido: 3, bueno: 3, malo: 0 },
+      { isbn: ISBN_C, productoId: 3, titulo: 'Libro C', declarado: 5, recibido: 5, bueno: 4, malo: 1, saldoConsignacion: null, excedeConsignacion: false },
+      { isbn: ISBN_A, productoId: 1, titulo: 'Libro A', declarado: 2, recibido: 2, bueno: 2, malo: 0, saldoConsignacion: null, excedeConsignacion: false },
+      { isbn: ISBN_B, productoId: 2, titulo: 'Libro B', declarado: 3, recibido: 3, bueno: 3, malo: 0, saldoConsignacion: null, excedeConsignacion: false },
     ]);
 
     // Eventos: 5 transiciones + devolucion.procesada con la reconciliación.
@@ -580,5 +600,76 @@ describe('AutorizacionService — corrección post-Procesado', () => {
     const procesadas = ctx.eventos.emitidos.filter(([n]) => n === DEVOLUCION_PROCESADA);
     expect(procesadas).toHaveLength(2);
     expect(procesadas[1][1].correccion).toBe(true);
+  });
+});
+
+describe('AutorizacionService — saldo en consignación', () => {
+  // Controla los 2 bultos (mismo reparto que el circuito feliz): recibido por
+  // ISBN → A=2, B=3, C=5 (1 de C en mal estado).
+  async function controlarAmbos(ctx: ReturnType<typeof crearServicio>, id: number) {
+    await ctx.svc.controlarBulto(deposito, id, 1, {
+      peso: 6,
+      controles: [
+        { isbn: ISBN_A, cantidad: 2 },
+        { isbn: ISBN_B, cantidad: 1 },
+      ],
+    });
+    await ctx.svc.controlarBulto(deposito, id, 2, {
+      peso: 4,
+      controles: [
+        { isbn: ISBN_B, cantidad: 2 },
+        { isbn: ISBN_C, cantidad: 5, malEstado: 1 },
+      ],
+    });
+  }
+
+  it('la reconciliación trae el saldo y marca el exceso por ISBN', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
+    await controlarAmbos(ctx, id);
+    ctx.consignacion.set(10, ISBN_A, 5); // recibido 2 < 5 → no excede
+    ctx.consignacion.set(10, ISBN_C, 3); // recibido 5 > 3 → excede
+    // ISBN_B sin dato → saldo null, no excede
+
+    const rec = await ctx.svc.calcularReconciliacion(id, 10);
+    const a = rec.find((l) => l.isbn === ISBN_A)!;
+    const b = rec.find((l) => l.isbn === ISBN_B)!;
+    const c = rec.find((l) => l.isbn === ISBN_C)!;
+    expect(a).toMatchObject({ saldoConsignacion: 5, excedeConsignacion: false });
+    expect(b).toMatchObject({ saldoConsignacion: null, excedeConsignacion: false });
+    expect(c).toMatchObject({ saldoConsignacion: 3, excedeConsignacion: true });
+  });
+
+  it('cerrar con exceso NO bloquea pero exige observación', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
+    await controlarAmbos(ctx, id);
+    ctx.consignacion.set(10, ISBN_A, 1); // recibido 2 > 1 → excede
+
+    await expect(
+      ctx.svc.cerrar(deposito, id, { ubicacionDestinoBueno: 'A-01', ubicacionDestinoMalo: 'DAN-01' }),
+    ).rejects.toThrow(BadRequestException);
+
+    const r = await ctx.svc.cerrar(deposito, id, {
+      ubicacionDestinoBueno: 'A-01',
+      ubicacionDestinoMalo: 'DAN-01',
+      observaciones: 'cliente devolvió más de lo que tenía en consignación',
+    });
+    expect(r.autorizacion.estado).toBe(DevEstado.PROCESADO);
+    const procesada = ctx.eventos.emitidos.find(([n]) => n === DEVOLUCION_PROCESADA);
+    expect(procesada![1].reconciliacion.find((l: any) => l.isbn === ISBN_A).excedeConsignacion).toBe(true);
+  });
+
+  it('sin saldo del ERP no marca exceso ni bloquea el cierre', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
+    await controlarAmbos(ctx, id);
+    // No se siembra ningún saldo.
+    const r = await ctx.svc.cerrar(deposito, id, {
+      ubicacionDestinoBueno: 'A-01',
+      ubicacionDestinoMalo: 'DAN-01',
+    });
+    expect(r.autorizacion.estado).toBe(DevEstado.PROCESADO);
+    expect(r.reconciliacion.every((l) => l.saldoConsignacion === null && !l.excedeConsignacion)).toBe(true);
   });
 });

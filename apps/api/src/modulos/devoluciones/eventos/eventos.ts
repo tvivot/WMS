@@ -24,6 +24,10 @@ export interface ReconciliacionLinea {
   recibido: number;
   bueno: number;
   malo: number;
+  /** Saldo en consignación del cliente para este ISBN (null = sin dato del ERP). */
+  saldoConsignacion: number | null;
+  /** recibido > saldoConsignacion. Informativo (no bloquea); exige observación al cerrar. */
+  excedeConsignacion: boolean;
 }
 
 export interface DevolucionProcesadaEvent {

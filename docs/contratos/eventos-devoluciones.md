@@ -41,6 +41,8 @@ tratarla como REEMPLAZO del resultado anterior, no como suma).
     recibido: number;
     bueno: number;   // recibido - malo → destino vendible
     malo: number;    // → dañados/cuarentena
+    saldoConsignacion: number | null;  // saldo del ERP para ese cliente+ISBN (null = sin dato)
+    excedeConsignacion: boolean;       // recibido > saldoConsignacion (informativo, no bloquea)
   }>;
   ubicacionDestinoBueno: string;
   ubicacionDestinoMalo: string;
@@ -48,6 +50,12 @@ tratarla como REEMPLAZO del resultado anterior, no como suma).
   ts: string;            // ISO 8601
 }
 ```
+
+> **Cambio retrocompatible (2026-06-17):** se sumaron `saldoConsignacion` y
+> `excedeConsignacion` por línea. Son additive (los consumidores existentes no
+> dejan de encontrar lo que leían). `saldoConsignacion = null` significa que el
+> ERP no envió saldo para ese cliente+ISBN; `excedeConsignacion` nunca es `true`
+> con saldo `null`. El saldo se carga vía el [puerto de consignación](consignacion-port.md).
 
 ## Reglas para consumidores
 

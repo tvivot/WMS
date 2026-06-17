@@ -16,6 +16,7 @@ export const PERMISOS = {
   TRANSPORTISTA_ADMINISTRAR: 'transportista.administrar',
   DEVOLUCION_CORREGIR: 'devolucion.corregir',
   DEVOLUCION_STOCK_VER: 'devolucion.stock.ver',
+  CONSIGNACION_IMPORTAR: 'consignacion.importar',
 } as const;
 
 export type PermisoCodigo = (typeof PERMISOS)[keyof typeof PERMISOS];
@@ -36,6 +37,8 @@ export const PERMISOS_DESCRIPCION: Record<string, string> = {
     'Corregir devoluciones ya procesadas (queda en auditoría)',
   [PERMISOS.DEVOLUCION_STOCK_VER]:
     'Ver el stock de libros en devoluciones (ingresadas, sin procesar)',
+  [PERMISOS.CONSIGNACION_IMPORTAR]:
+    'Importar el saldo en consignación desde el ERP (integrador)',
 };
 
 const TODOS = Object.values(PERMISOS);

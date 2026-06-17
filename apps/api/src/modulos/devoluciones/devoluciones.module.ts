@@ -8,6 +8,8 @@ import { StockController } from './stock/stock.controller';
 import { StockService } from './stock/stock.service';
 import { TextFreeUbicacionResolverAdapter } from './puertos/ubicacion-resolver.adapter';
 import { UBICACION_RESOLVER } from './puertos/ubicacion-resolver.port';
+import { PrismaConsignacionAdapter } from './puertos/consignacion.adapter';
+import { CONSIGNACION_PORT } from './puertos/consignacion.port';
 
 @Module({
   imports: [CatalogoModule],
@@ -19,6 +21,11 @@ import { UBICACION_RESOLVER } from './puertos/ubicacion-resolver.port';
     // Seam de ubicaciones: hoy texto libre. Cuando exista Ubicaciones, se
     // cambia SOLO esta línea por el adapter que delega en UbicacionesPort.
     { provide: UBICACION_RESOLVER, useClass: TextFreeUbicacionResolverAdapter },
+    // Puerto inbound del saldo en consignación: Integraciones lo invoca para
+    // cargar el snapshot del ERP. Dueño del dato = Devoluciones.
+    { provide: CONSIGNACION_PORT, useClass: PrismaConsignacionAdapter },
   ],
+  // Se exporta el puerto para que Integraciones inyecte el token (no internos).
+  exports: [CONSIGNACION_PORT],
 })
 export class DevolucionesModule {}
