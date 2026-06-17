@@ -21,6 +21,8 @@ import {
   DeclararDto,
   IngresoDto,
   RecibirDto,
+  ResolverExcepcionDto,
+  SolicitarExcepcionDto,
 } from './dto';
 
 @Controller('devoluciones/autorizaciones')
@@ -45,6 +47,13 @@ export class AutorizacionController {
       estado: est,
       clienteId: clienteId ? Number(clienteId) : undefined,
     });
+  }
+
+  /** Cola de excepciones de consignación pendientes (Gerencia). Antes de :id. */
+  @RequierePermiso(PERMISOS.DEVOLUCION_AUTORIZAR_EXCEPCION)
+  @Get('excepciones/pendientes')
+  excepcionesPendientes() {
+    return this.svc.excepcionesPendientes();
   }
 
   // Propiedad verificada en el servicio: un cliente solo ve lo suyo.
@@ -78,6 +87,29 @@ export class AutorizacionController {
   @Patch(':id/despachar')
   despachar(@Actor() actor: JwtPayload, @Param('id', ParseIntPipe) id: number) {
     return this.svc.despachar(actor, id);
+  }
+
+  /** El cliente/creador solicita autorizar un libro fuera de consignación. */
+  @RequierePermiso(PERMISOS.SOLICITUD_CREAR)
+  @Post(':id/excepciones')
+  solicitarExcepcion(
+    @Actor() actor: JwtPayload,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SolicitarExcepcionDto,
+  ) {
+    return this.svc.solicitarExcepcion(actor, id, dto);
+  }
+
+  /** Aprobar/rechazar una excepción: solo Gerencia (permiso específico). */
+  @RequierePermiso(PERMISOS.DEVOLUCION_AUTORIZAR_EXCEPCION)
+  @Patch(':id/excepciones/:excId/resolver')
+  resolverExcepcion(
+    @Actor() actor: JwtPayload,
+    @Param('id', ParseIntPipe) id: number,
+    @Param('excId', ParseIntPipe) excId: number,
+    @Body() dto: ResolverExcepcionDto,
+  ) {
+    return this.svc.resolverExcepcion(actor, id, excId, dto);
   }
 
   @RequierePermiso(PERMISOS.DEPOSITO_RECIBIR)

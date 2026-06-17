@@ -2,6 +2,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsInt,
   IsNumber,
   IsOptional,
@@ -107,6 +108,37 @@ export class CorregirControlDto extends ControlarBultoDto {
   @IsOptional()
   @IsString()
   observaciones?: string;
+}
+
+/** El cliente (o quien arma la devolución) solicita autorizar un ISBN fuera de
+ *  su consignación, por una cantidad, en ESA devolución. */
+export class SolicitarExcepcionDto {
+  @IsString()
+  isbn!: string;
+
+  @IsInt()
+  @Min(1)
+  cantidad!: number;
+
+  @IsOptional()
+  @IsString()
+  motivo?: string;
+}
+
+/** Resolución de una excepción por un usuario con permiso (Gerencia). */
+export class ResolverExcepcionDto {
+  @IsBoolean()
+  aprobar!: boolean;
+
+  /** Cantidad autorizada (la puede ajustar el aprobador). Por defecto, la solicitada. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  cantidad?: number;
+
+  @IsOptional()
+  @IsString()
+  motivo?: string;
 }
 
 export class CerrarDto {

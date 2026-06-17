@@ -11,6 +11,7 @@ import {
   PackageCheck,
   Settings,
   Shield,
+  ShieldCheck,
   Truck,
   Users,
   X,
@@ -30,6 +31,7 @@ interface NavItem {
 const ITEMS: NavItem[] = [
   { to: '/devoluciones', label: 'Devoluciones', icon: ClipboardList },
   { to: '/stock-devoluciones', label: 'Stock Devol.', icon: Boxes, permiso: PERMISOS.DEVOLUCION_STOCK_VER },
+  { to: '/excepciones-consignacion', label: 'Autoriz. Consig.', icon: ShieldCheck, permiso: PERMISOS.DEVOLUCION_AUTORIZAR_EXCEPCION },
   { to: '/informes', label: 'Informes', icon: BarChart3, permiso: PERMISOS.INFORMES_VER },
   { to: '/catalogo', label: 'Catálogo', icon: BookOpen, permiso: PERMISOS.CATALOGO_ADMINISTRAR },
   { to: '/clientes', label: 'Clientes', icon: Building2, permiso: PERMISOS.CLIENTE_ADMINISTRAR },

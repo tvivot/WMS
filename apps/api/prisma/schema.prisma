@@ -252,6 +252,7 @@ model DevAutorizacion {
 
   declaraciones DevDeclaracion[]
   bultos        DevBulto[]
+  excepciones   DevExcepcionConsignacion[]
 
   @@index([estado])
   @@index([clienteId])
@@ -327,4 +328,42 @@ model DevConsignacionSaldo {
   @@index([clienteId])
   @@index([isbn])
   @@map("dev_consignacion_saldo")
+}
+
+enum DevExcepcionEstado {
+  PENDIENTE
+  APROBADA
+  RECHAZADA
+}
+
+/// Excepción de consignación: autoriza declarar `cantidad` unidades de un ISBN
+/// en UNA devolución, por fuera de lo que el cliente tiene en consignación
+/// (libro ausente de la lista o por encima del saldo). La solicita el cliente
+/// (o quien declara) y la aprueba/rechaza un usuario con permiso
+/// `devolucion.autorizar_excepcion` (Gerencia). Alcance: solo esa autorización.
+/// Lo permitido a declarar por ISBN = saldo consignación + Σ excepciones APROBADAS.
+model DevExcepcionConsignacion {
+  id             Int                @id @default(autoincrement())
+  autorizacionId Int                @map("autorizacion_id")
+  isbn           String             @db.VarChar(20)
+  productoId     Int?               @map("producto_id")
+  cantidad       Int // unidades autorizadas por fuera de la consignación
+  estado         DevExcepcionEstado @default(PENDIENTE)
+  // Quién solicita (cliente o usuario interno que arma la devolución).
+  solicitadoPorId   Int          @map("solicitado_por_id")
+  solicitadoPorTipo DevActorTipo @map("solicitado_por_tipo")
+  motivoSolicitud   String?      @map("motivo_solicitud") @db.Text
+  // Resolución: usuario con permiso (Gerencia). Null mientras está PENDIENTE.
+  resueltoPorId   Int?      @map("resuelto_por_id")
+  resueltoEn      DateTime? @map("resuelto_en")
+  motivoResolucion String?  @map("motivo_resolucion") @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  autorizacion DevAutorizacion @relation(fields: [autorizacionId], references: [id], onDelete: Cascade)
+
+  @@index([autorizacionId])
+  @@index([estado])
+  @@map("dev_excepcion_consignacion")
 }

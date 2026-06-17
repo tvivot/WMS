@@ -38,6 +38,7 @@ function crearFakePrisma() {
     declaraciones: [] as Fila[],
     bultos: [] as Fila[],
     controles: [] as Fila[],
+    excepciones: [] as Fila[],
     clientes: [
       { id: 10, nroCliente: 'C-10', nombre: 'Cliente X', activo: true, depositoId: null },
       { id: 11, nroCliente: 'C-11', nombre: 'Otro Cliente', activo: true, depositoId: null },
@@ -67,6 +68,9 @@ function crearFakePrisma() {
             .filter((b) => b.autorizacionId === a.id)
             .sort((x: any, y: any) => x.numero - y.numero)
             .map((b) => ({ ...b, controles: db.controles.filter((c) => c.bultoId === b.id).map((x) => ({ ...x })) })),
+          excepciones: include.excepciones
+            ? db.excepciones.filter((e) => e.autorizacionId === a.id).map((x) => ({ ...x }))
+            : undefined,
         };
       },
       create: async ({ data }: any) => {
@@ -152,6 +156,54 @@ function crearFakePrisma() {
       },
       createMany: async ({ data }: any) => {
         for (const c of data) db.controles.push({ id: nextId(), ...c });
+      },
+    },
+    devExcepcionConsignacion: {
+      findMany: async ({ where = {} }: any) =>
+        db.excepciones
+          .filter(
+            (e: any) =>
+              (where.autorizacionId === undefined || e.autorizacionId === where.autorizacionId) &&
+              (where.estado === undefined || e.estado === where.estado) &&
+              (where.isbn?.in === undefined || where.isbn.in.includes(e.isbn)),
+          )
+          .sort((x: any, y: any) => x.id - y.id)
+          .map((x) => ({ ...x })),
+      findFirst: async ({ where = {} }: any) => {
+        const matchEstado = (estado: any, filtro: any) =>
+          filtro === undefined || (filtro?.in ? filtro.in.includes(estado) : estado === filtro);
+        const e = db.excepciones.find(
+          (x: any) =>
+            (where.autorizacionId === undefined || x.autorizacionId === where.autorizacionId) &&
+            (where.isbn === undefined || x.isbn === where.isbn) &&
+            matchEstado(x.estado, where.estado),
+        );
+        return e ? { ...e } : null;
+      },
+      findUnique: async ({ where }: any) => {
+        const e = db.excepciones.find((x) => x.id === where.id);
+        return e ? { ...e } : null;
+      },
+      create: async ({ data }: any) => {
+        const fila: Fila = {
+          id: nextId(),
+          productoId: null,
+          motivoSolicitud: null,
+          resueltoPorId: null,
+          resueltoEn: null,
+          motivoResolucion: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          ...data,
+        };
+        db.excepciones.push(fila);
+        return { ...fila };
+      },
+      update: async ({ where, data }: any) => {
+        const e = db.excepciones.find((x) => x.id === where.id);
+        if (!e) throw new Error('excepción inexistente');
+        Object.assign(e, data);
+        return { ...e };
       },
     },
     cliente: {
@@ -257,6 +309,11 @@ async function avanzarHasta(ctx: ReturnType<typeof crearServicio>, hasta: DevEst
   if (hasta === DevEstado.A_APROBAR) return a.id;
   await svc.aprobar(vendedor, a.id);
   if (hasta === DevEstado.APROBADO) return a.id;
+  // Consignación del cliente: el cliente solo puede declarar lo que tiene en
+  // consignación. Sembramos exactamente lo que declara el camino feliz.
+  ctx.consignacion.set(10, ISBN_A, 2);
+  ctx.consignacion.set(10, ISBN_B, 3);
+  ctx.consignacion.set(10, ISBN_C, 5);
   await svc.declarar(clienteX, a.id, {
     lineas: [
       { isbn: ISBN_A, cantidad: 2 },
@@ -325,6 +382,7 @@ describe('AutorizacionService — máquina de estados', () => {
   it('no permite despachar sin transportista', async () => {
     const ctx = crearServicio();
     const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    ctx.consignacion.set(10, ISBN_A, 5);
     await ctx.svc.declarar(clienteX, id, {
       lineas: [{ isbn: ISBN_A, cantidad: 1 }],
       bultosDeclarados: 1,
@@ -337,6 +395,7 @@ describe('AutorizacionService — máquina de estados', () => {
   it('rechaza transportista inexistente o inactivo', async () => {
     const ctx = crearServicio();
     const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    ctx.consignacion.set(10, ISBN_A, 5);
     const base = { lineas: [{ isbn: ISBN_A, cantidad: 1 }], bultosDeclarados: 1, pesoTotalDeclarado: 2 };
     await expect(
       ctx.svc.declarar(clienteX, id, { ...base, transportistaId: 999 }),
@@ -539,9 +598,9 @@ describe('AutorizacionService — circuito completo (criterio de validación)', 
     // Orden: por ISBN ascendente (C < A < B numéricamente).
     const rec = await ctx.svc.calcularReconciliacion(id, 10);
     expect(rec).toEqual([
-      { isbn: ISBN_C, productoId: 3, titulo: 'Libro C', declarado: 5, recibido: 5, bueno: 4, malo: 1, saldoConsignacion: null, excedeConsignacion: false },
-      { isbn: ISBN_A, productoId: 1, titulo: 'Libro A', declarado: 2, recibido: 2, bueno: 2, malo: 0, saldoConsignacion: null, excedeConsignacion: false },
-      { isbn: ISBN_B, productoId: 2, titulo: 'Libro B', declarado: 3, recibido: 3, bueno: 3, malo: 0, saldoConsignacion: null, excedeConsignacion: false },
+      { isbn: ISBN_C, productoId: 3, titulo: 'Libro C', declarado: 5, recibido: 5, bueno: 4, malo: 1, saldoConsignacion: 5, excedeConsignacion: false },
+      { isbn: ISBN_A, productoId: 1, titulo: 'Libro A', declarado: 2, recibido: 2, bueno: 2, malo: 0, saldoConsignacion: 2, excedeConsignacion: false },
+      { isbn: ISBN_B, productoId: 2, titulo: 'Libro B', declarado: 3, recibido: 3, bueno: 3, malo: 0, saldoConsignacion: 3, excedeConsignacion: false },
     ]);
 
     // Eventos: 5 transiciones + devolucion.procesada con la reconciliación.
@@ -627,16 +686,16 @@ describe('AutorizacionService — saldo en consignación', () => {
     const ctx = crearServicio();
     const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
     await controlarAmbos(ctx, id);
+    // avanzarHasta dejó A=2, B=3, C=5; sobreescribimos para forzar el exceso.
     ctx.consignacion.set(10, ISBN_A, 5); // recibido 2 < 5 → no excede
     ctx.consignacion.set(10, ISBN_C, 3); // recibido 5 > 3 → excede
-    // ISBN_B sin dato → saldo null, no excede
 
     const rec = await ctx.svc.calcularReconciliacion(id, 10);
     const a = rec.find((l) => l.isbn === ISBN_A)!;
     const b = rec.find((l) => l.isbn === ISBN_B)!;
     const c = rec.find((l) => l.isbn === ISBN_C)!;
     expect(a).toMatchObject({ saldoConsignacion: 5, excedeConsignacion: false });
-    expect(b).toMatchObject({ saldoConsignacion: null, excedeConsignacion: false });
+    expect(b).toMatchObject({ saldoConsignacion: 3, excedeConsignacion: false }); // recibido 3 == 3
     expect(c).toMatchObject({ saldoConsignacion: 3, excedeConsignacion: true });
   });
 
@@ -660,16 +719,135 @@ describe('AutorizacionService — saldo en consignación', () => {
     expect(procesada![1].reconciliacion.find((l: any) => l.isbn === ISBN_A).excedeConsignacion).toBe(true);
   });
 
-  it('sin saldo del ERP no marca exceso ni bloquea el cierre', async () => {
+  it('recibido dentro del saldo no marca exceso ni bloquea el cierre', async () => {
     const ctx = crearServicio();
     const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
     await controlarAmbos(ctx, id);
-    // No se siembra ningún saldo.
+    // Saldo sembrado por avanzarHasta == recibido (A=2, B=3, C=5): nadie excede.
     const r = await ctx.svc.cerrar(deposito, id, {
       ubicacionDestinoBueno: 'A-01',
       ubicacionDestinoMalo: 'DAN-01',
     });
     expect(r.autorizacion.estado).toBe(DevEstado.PROCESADO);
-    expect(r.reconciliacion.every((l) => l.saldoConsignacion === null && !l.excedeConsignacion)).toBe(true);
+    expect(r.reconciliacion.every((l) => !l.excedeConsignacion)).toBe(true);
+  });
+});
+
+describe('AutorizacionService — regla de consignación al declarar + excepciones', () => {
+  // Nota: el permiso devolucion.autorizar_excepcion se valida en el controller
+  // (@RequierePermiso), no en el servicio; acá se prueba la lógica.
+  async function aprobada(ctx: ReturnType<typeof crearServicio>) {
+    const a = await ctx.svc.crear(vendedor, { clienteId: 10 });
+    await ctx.svc.aprobar(vendedor, a.id);
+    return a.id;
+  }
+  const carga = (lineas: { isbn: string; cantidad: number }[]) => ({
+    lineas,
+    bultosDeclarados: 1,
+    pesoTotalDeclarado: 5,
+    transportistaId: 5,
+  });
+
+  it('bloquea declarar un libro que NO está en la consignación', async () => {
+    const ctx = crearServicio();
+    const id = await aprobada(ctx);
+    ctx.consignacion.set(10, ISBN_A, 5); // solo A en consignación
+    await expect(
+      ctx.svc.declarar(clienteX, id, carga([
+        { isbn: ISBN_A, cantidad: 2 },
+        { isbn: ISBN_B, cantidad: 1 }, // fuera de consignación
+      ])),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('bloquea declarar MÁS unidades de las consignadas', async () => {
+    const ctx = crearServicio();
+    const id = await aprobada(ctx);
+    ctx.consignacion.set(10, ISBN_A, 2);
+    await expect(
+      ctx.svc.declarar(clienteX, id, carga([{ isbn: ISBN_A, cantidad: 3 }])),
+    ).rejects.toThrow(BadRequestException);
+    // Hasta el saldo, sí deja.
+    const det = await ctx.svc.declarar(clienteX, id, carga([{ isbn: ISBN_A, cantidad: 2 }]));
+    expect(det.declaraciones).toHaveLength(1);
+  });
+
+  it('solicitud + aprobación habilita declarar el libro fuera de lista', async () => {
+    const ctx = crearServicio();
+    const id = await aprobada(ctx);
+    ctx.consignacion.set(10, ISBN_A, 5);
+
+    const d1 = await ctx.svc.solicitarExcepcion(clienteX, id, { isbn: ISBN_B, cantidad: 1, motivo: 'devolución especial' });
+    expect(d1.excepciones).toHaveLength(1);
+    expect(d1.excepciones[0].estado).toBe('PENDIENTE');
+
+    // Mientras está pendiente, sigue bloqueado.
+    await expect(
+      ctx.svc.declarar(clienteX, id, carga([{ isbn: ISBN_A, cantidad: 5 }, { isbn: ISBN_B, cantidad: 1 }])),
+    ).rejects.toThrow(BadRequestException);
+
+    // Gerencia aprueba.
+    const exc = d1.excepciones[0];
+    const d2 = await ctx.svc.resolverExcepcion(admin, id, exc.id, { aprobar: true });
+    expect(d2.excepciones[0].estado).toBe('APROBADA');
+
+    // Ahora sí se puede declarar B.
+    const det = await ctx.svc.declarar(clienteX, id, carga([
+      { isbn: ISBN_A, cantidad: 5 },
+      { isbn: ISBN_B, cantidad: 1 },
+    ]));
+    expect(det.declaraciones.map((l) => l.isbn).sort()).toEqual([ISBN_A, ISBN_B].sort());
+  });
+
+  it('rechazar la excepción deja el libro bloqueado', async () => {
+    const ctx = crearServicio();
+    const id = await aprobada(ctx);
+    const d1 = await ctx.svc.solicitarExcepcion(clienteX, id, { isbn: ISBN_B, cantidad: 1 });
+    await ctx.svc.resolverExcepcion(admin, id, d1.excepciones[0].id, { aprobar: false, motivo: 'no corresponde' });
+    await expect(
+      ctx.svc.declarar(clienteX, id, carga([{ isbn: ISBN_B, cantidad: 1 }])),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('el aprobador puede ajustar la cantidad autorizada', async () => {
+    const ctx = crearServicio();
+    const id = await aprobada(ctx);
+    const d1 = await ctx.svc.solicitarExcepcion(clienteX, id, { isbn: ISBN_B, cantidad: 5 });
+    await ctx.svc.resolverExcepcion(admin, id, d1.excepciones[0].id, { aprobar: true, cantidad: 2 });
+    // Permitido = 0 (saldo) + 2 (excepción) = 2.
+    await expect(
+      ctx.svc.declarar(clienteX, id, carga([{ isbn: ISBN_B, cantidad: 3 }])),
+    ).rejects.toThrow(BadRequestException);
+    const det = await ctx.svc.declarar(clienteX, id, carga([{ isbn: ISBN_B, cantidad: 2 }]));
+    expect(det.declaraciones).toHaveLength(1);
+  });
+
+  it('no permite dos solicitudes pendientes para el mismo ISBN', async () => {
+    const ctx = crearServicio();
+    const id = await aprobada(ctx);
+    await ctx.svc.solicitarExcepcion(clienteX, id, { isbn: ISBN_B, cantidad: 1 });
+    await expect(
+      ctx.svc.solicitarExcepcion(clienteX, id, { isbn: ISBN_B, cantidad: 1 }),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('no permite re-solicitar un ISBN que ya tiene excepción APROBADA (evita apilar)', async () => {
+    const ctx = crearServicio();
+    const id = await aprobada(ctx);
+    const d1 = await ctx.svc.solicitarExcepcion(clienteX, id, { isbn: ISBN_B, cantidad: 1 });
+    await ctx.svc.resolverExcepcion(admin, id, d1.excepciones[0].id, { aprobar: true });
+    await expect(
+      ctx.svc.solicitarExcepcion(clienteX, id, { isbn: ISBN_B, cantidad: 1 }),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('lista las excepciones pendientes para los aprobadores', async () => {
+    const ctx = crearServicio();
+    const id = await aprobada(ctx);
+    await ctx.svc.solicitarExcepcion(clienteX, id, { isbn: ISBN_B, cantidad: 1 });
+    const pend = await ctx.svc.excepcionesPendientes();
+    expect(pend).toHaveLength(1);
+    expect(pend[0]).toMatchObject({ autorizacionId: id, isbn: ISBN_B, titulo: 'Libro B' });
+    expect(pend[0].cliente).toMatchObject({ nroCliente: 'C-10' });
   });
 });

@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { DevEstado, DevEstadoControl } from '@prisma/client';
+import { DevEstado, DevEstadoControl, DevExcepcionEstado } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditoriaService } from '../../core/auditoria/auditoria.service';
 import { CatalogoService } from '../../core/catalogo/catalogo.service';
@@ -21,6 +21,8 @@ import {
   IngresoDto,
   LineaControlDto,
   RecibirDto,
+  ResolverExcepcionDto,
+  SolicitarExcepcionDto,
 } from './dto';
 import {
   DEVOLUCION_ESTADO_CAMBIADO,
@@ -215,6 +217,29 @@ export class AutorizacionService {
       );
     }
 
+    // Regla de consignación: el cliente solo puede declarar lo que tiene en
+    // consignación. Un título fuera de la lista, o por encima del saldo, exige
+    // una excepción APROBADA (permiso devolucion.autorizar_excepcion).
+    // Permitido por ISBN = saldo consignación + Σ excepciones aprobadas.
+    const permitido = await this.permitidoPorIsbn(
+      id,
+      a.clienteId,
+      resueltas.map((r) => r.isbn),
+    );
+    const excedidos = resueltas.filter((r) => r.cantidad > (permitido.get(r.isbn) ?? 0));
+    if (excedidos.length > 0) {
+      const detalle = excedidos
+        .map((r) => {
+          const ok = permitido.get(r.isbn) ?? 0;
+          return `${r.isbn} (declarás ${r.cantidad}, en consignación ${ok}, falta autorizar ${r.cantidad - ok})`;
+        })
+        .join('; ');
+      throw new BadRequestException(
+        `Estos libros están fuera de la consignación del cliente o la superan; ` +
+          `requieren autorización de Gerencia: ${detalle}`,
+      );
+    }
+
     // El transportista declarado debe existir y estar activo.
     if (dto.transportistaId !== undefined && dto.transportistaId !== null) {
       const t = await this.prisma.transportista.findUnique({
@@ -245,6 +270,174 @@ export class AutorizacionService {
       }),
     ]);
     return this.detalle(id);
+  }
+
+  /**
+   * Lo permitido a declarar por ISBN = saldo en consignación del cliente +
+   * Σ excepciones APROBADAS de esa devolución. Ausencia de saldo = 0.
+   */
+  private async permitidoPorIsbn(
+    autorizacionId: number,
+    clienteId: number,
+    isbns: string[],
+  ): Promise<Map<string, number>> {
+    const [saldos, aprobadas] = await Promise.all([
+      this.consignacion.saldosDe(clienteId, isbns),
+      this.prisma.devExcepcionConsignacion.findMany({
+        where: {
+          autorizacionId,
+          estado: DevExcepcionEstado.APROBADA,
+          isbn: { in: isbns },
+        },
+        select: { isbn: true, cantidad: true },
+      }),
+    ]);
+    const mapa = new Map<string, number>();
+    for (const isbn of isbns) mapa.set(isbn, saldos.get(isbn) ?? 0);
+    for (const e of aprobadas) mapa.set(e.isbn, (mapa.get(e.isbn) ?? 0) + e.cantidad);
+    return mapa;
+  }
+
+  /**
+   * Solicitar autorización para declarar un ISBN fuera de la consignación (o por
+   * encima del saldo) en esta devolución. La crea el cliente dueño o quien arma
+   * la devolución; queda PENDIENTE hasta que la resuelva alguien con permiso.
+   */
+  async solicitarExcepcion(actor: JwtPayload, id: number, dto: SolicitarExcepcionDto) {
+    const a = await this.obtenerOr404(id);
+    this.verificarPropiedad(actor, a.clienteId);
+    this.exigirEstado(a.estado, DevEstado.APROBADO);
+
+    const norm = normalizarIsbn(dto.isbn);
+    if (!norm) throw new BadRequestException(`ISBN inválido: ${dto.isbn}`);
+    const productos = await this.catalogo.resolverPorIsbnBatch([norm]);
+    const prod = productos.get(norm);
+    if (!prod) {
+      throw new BadRequestException(`ISBN no catalogado: ${dto.isbn}`);
+    }
+
+    // Evita apilar autorizaciones del mismo ISBN: si ya hay una PENDIENTE o
+    // APROBADA, no se crea otra (el aprobador ajusta la cantidad de la existente).
+    const yaExiste = await this.prisma.devExcepcionConsignacion.findFirst({
+      where: {
+        autorizacionId: id,
+        isbn: norm,
+        estado: { in: [DevExcepcionEstado.PENDIENTE, DevExcepcionEstado.APROBADA] },
+      },
+    });
+    if (yaExiste) {
+      throw new BadRequestException(
+        yaExiste.estado === DevExcepcionEstado.APROBADA
+          ? 'Ese ISBN ya tiene una autorización aprobada en esta devolución'
+          : 'Ya hay una solicitud pendiente para ese ISBN',
+      );
+    }
+
+    const creada = await this.prisma.devExcepcionConsignacion.create({
+      data: {
+        autorizacionId: id,
+        isbn: norm,
+        productoId: prod.id,
+        cantidad: dto.cantidad,
+        estado: DevExcepcionEstado.PENDIENTE,
+        solicitadoPorId: actor.sub,
+        solicitadoPorTipo: actor.tipo,
+        motivoSolicitud: dto.motivo ?? null,
+      },
+    });
+    await this.auditoria.registrar({
+      actorId: actor.sub,
+      actorTipo: actor.tipo,
+      accion: 'solicitar_excepcion',
+      entidad: 'dev_excepcion_consignacion',
+      entidadId: String(creada.id),
+      detalle: { autorizacionId: id, isbn: norm, cantidad: dto.cantidad },
+    });
+    return this.detalle(id);
+  }
+
+  /**
+   * Resolver (aprobar/rechazar) una excepción. El endpoint exige el permiso
+   * devolucion.autorizar_excepcion (Gerencia). El aprobador puede ajustar la
+   * cantidad autorizada. Solo opera sobre excepciones PENDIENTES.
+   */
+  async resolverExcepcion(
+    actor: JwtPayload,
+    id: number,
+    excepcionId: number,
+    dto: ResolverExcepcionDto,
+  ) {
+    const exc = await this.prisma.devExcepcionConsignacion.findUnique({
+      where: { id: excepcionId },
+    });
+    if (!exc || exc.autorizacionId !== id) {
+      throw new NotFoundException('Excepción inexistente');
+    }
+    if (exc.estado !== DevExcepcionEstado.PENDIENTE) {
+      throw new BadRequestException('La excepción ya fue resuelta');
+    }
+
+    await this.prisma.devExcepcionConsignacion.update({
+      where: { id: excepcionId },
+      data: {
+        estado: dto.aprobar ? DevExcepcionEstado.APROBADA : DevExcepcionEstado.RECHAZADA,
+        cantidad: dto.aprobar && dto.cantidad ? dto.cantidad : exc.cantidad,
+        resueltoPorId: actor.sub,
+        resueltoEn: new Date(),
+        motivoResolucion: dto.motivo ?? null,
+      },
+    });
+    await this.auditoria.registrar({
+      actorId: actor.sub,
+      actorTipo: actor.tipo,
+      accion: dto.aprobar ? 'aprobar_excepcion' : 'rechazar_excepcion',
+      entidad: 'dev_excepcion_consignacion',
+      entidadId: String(excepcionId),
+      detalle: { autorizacionId: id, isbn: exc.isbn },
+    });
+    return this.detalle(id);
+  }
+
+  /** Cola de excepciones PENDIENTES para los aprobadores (permiso). */
+  async excepcionesPendientes() {
+    const pendientes = await this.prisma.devExcepcionConsignacion.findMany({
+      where: { estado: DevExcepcionEstado.PENDIENTE },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (pendientes.length === 0) return [];
+
+    const info = await this.infoPorProducto(
+      pendientes.map((e) => e.productoId).filter((x): x is number => x !== null),
+    );
+    const autIds = [...new Set(pendientes.map((e) => e.autorizacionId))];
+    const auts = await this.prisma.devAutorizacion.findMany({
+      where: { id: { in: autIds } },
+      select: { id: true, clienteId: true },
+    });
+    const clienteIds = [...new Set(auts.map((x) => x.clienteId))];
+    const clientes = await this.prisma.cliente.findMany({
+      where: { id: { in: clienteIds } },
+      select: { id: true, nroCliente: true, nombre: true },
+    });
+    const autMapa = new Map(auts.map((x) => [x.id, x]));
+    const cliMapa = new Map(clientes.map((c) => [c.id, c]));
+
+    return pendientes.map((e) => {
+      const p = e.productoId !== null ? info.get(e.productoId) : undefined;
+      const aut = autMapa.get(e.autorizacionId);
+      return {
+        id: e.id,
+        autorizacionId: e.autorizacionId,
+        isbn: e.isbn,
+        cantidad: e.cantidad,
+        titulo: p?.titulo ?? null,
+        editorial: p?.editorial ?? null,
+        imagenUrl: p?.imagenUrl ?? null,
+        motivoSolicitud: e.motivoSolicitud,
+        createdAt: e.createdAt,
+        cliente: aut ? (cliMapa.get(aut.clienteId) ?? null) : null,
+      };
+    });
   }
 
   /** Despacho: APROBADO → En tránsito. */
@@ -706,6 +899,7 @@ export class AutorizacionService {
       include: {
         declaraciones: true,
         bultos: { include: { controles: true }, orderBy: { numero: 'asc' } },
+        excepciones: { orderBy: { createdAt: 'desc' } },
       },
     });
     if (!a) throw new NotFoundException('Autorización no encontrada');
@@ -716,6 +910,7 @@ export class AutorizacionService {
       ...a.bultos.flatMap((b) =>
         b.controles.map((c) => c.productoId).filter((x): x is number => x !== null),
       ),
+      ...a.excepciones.map((e) => e.productoId).filter((x): x is number => x !== null),
     ]);
     const [cliente, transportista, creadoPor] = await Promise.all([
       this.prisma.cliente.findUnique({
@@ -761,6 +956,7 @@ export class AutorizacionService {
       creadoPor,
       declaraciones: a.declaraciones.map(conTitulo),
       bultos: a.bultos.map((b) => ({ ...b, controles: b.controles.map(conTitulo) })),
+      excepciones: a.excepciones.map(conTitulo),
     };
   }
 }

@@ -12,6 +12,12 @@ import type { ProductoLite } from '../../lib/producto';
 interface Linea { id: number; isbn: string; cantidad: number; productoId: number | null; titulo: string | null; editorial: string | null; imagenUrl: string | null }
 interface Control { id: number; isbn: string; cantidad: number; malEstado: number; titulo: string | null; editorial: string | null; imagenUrl: string | null }
 interface Bulto { id: number; numero: number; peso: string | null; estadoControl: string; controles: Control[] }
+type ExcepcionEstado = 'PENDIENTE' | 'APROBADA' | 'RECHAZADA';
+interface Excepcion {
+  id: number; isbn: string; cantidad: number; estado: ExcepcionEstado;
+  titulo: string | null; editorial: string | null; imagenUrl: string | null;
+  motivoSolicitud: string | null; motivoResolucion: string | null; createdAt: string;
+}
 interface Detalle {
   id: number; estado: Estado; clienteId: number; depositoId: number;
   transportistaId: number | null;
@@ -20,7 +26,7 @@ interface Detalle {
   creadoPor: { tipo: 'usuario' | 'cliente'; nombre: string } | null;
   bultosDeclarados: number | null; pesoTotalDeclarado: string | null; bultosRecibidos: number | null;
   ubicacionEspera: string | null; ubicacionDestinoBueno: string | null; ubicacionDestinoMalo: string | null;
-  observaciones: string | null; declaraciones: Linea[]; bultos: Bulto[];
+  observaciones: string | null; declaraciones: Linea[]; bultos: Bulto[]; excepciones: Excepcion[];
 }
 interface TransportistaOpcion { id: number; nombre: string }
 
@@ -97,6 +103,10 @@ export function DevolucionDetalle() {
 
       {d.estado === 'APROBADO' && puede(PERMISOS.SOLICITUD_CREAR) && (
         <PanelDeclaracion d={d} onDone={cargar} onError={setError} />
+      )}
+
+      {(d.estado === 'APROBADO' || d.excepciones.length > 0) && (
+        <PanelExcepciones d={d} onDone={cargar} onError={setError} />
       )}
 
       {d.estado === 'EN_TRANSITO' && puede(PERMISOS.DEPOSITO_RECIBIR) && (
@@ -255,6 +265,106 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
           <Truck className="h-4 w-4" /> Despachar
         </button>
       </div>
+    </Card>
+  );
+}
+
+const EXC_COLOR: Record<ExcepcionEstado, string> = {
+  PENDIENTE: 'bg-amber-100 text-amber-700',
+  APROBADA: 'bg-emerald-100 text-emerald-700',
+  RECHAZADA: 'bg-red-100 text-red-700',
+};
+
+/** Excepciones de consignación: el cliente solicita autorizar un libro fuera de
+ *  su consignación; Gerencia (permiso) aprueba/rechaza. */
+function PanelExcepciones({ d, onDone, onError }: { d: Detalle; onDone: () => void; onError: (s: string) => void }) {
+  const { puede } = useAuth();
+  const puedeAutorizar = puede(PERMISOS.DEVOLUCION_AUTORIZAR_EXCEPCION);
+  const editable = d.estado === 'APROBADO';
+  const [isbn, setIsbn] = useState('');
+  const [cantidad, setCantidad] = useState('1');
+  const [motivo, setMotivo] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const solicitar = async () => {
+    onError('');
+    setBusy(true);
+    try {
+      await api.post(`/devoluciones/autorizaciones/${d.id}/excepciones`, {
+        isbn: isbn.trim(),
+        cantidad: Number(cantidad),
+        motivo: motivo.trim() || undefined,
+      });
+      setIsbn(''); setCantidad('1'); setMotivo('');
+      onDone();
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resolver = async (excId: number, aprobar: boolean) => {
+    onError('');
+    try {
+      await api.patch(`/devoluciones/autorizaciones/${d.id}/excepciones/${excId}/resolver`, { aprobar });
+      onDone();
+    } catch (e) {
+      onError((e as Error).message);
+    }
+  };
+
+  return (
+    <Card>
+      <h2 className="font-semibold mb-1">Autorizaciones fuera de consignación</h2>
+      <p className="text-sm text-slate-500 mb-4">
+        El cliente solo puede devolver libros que tiene en consignación. Para devolver un libro fuera de
+        esa lista (o más unidades de las que tiene), se solicita autorización; la aprueba Gerencia.
+      </p>
+
+      {d.excepciones.length > 0 ? (
+        <div className="divide-y divide-slate-100 mb-2">
+          {d.excepciones.map((e) => (
+            <div key={e.id} className="flex items-center gap-2 py-2">
+              <ProductoThumb producto={{ isbn: e.isbn, titulo: e.titulo ?? e.isbn, editorial: e.editorial, imagenUrl: e.imagenUrl }} size={32} />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm text-slate-800 truncate">{e.titulo ?? '—'}</div>
+                <div className="text-[11px] text-slate-400 tabnum">{e.isbn} · {e.cantidad} u.</div>
+                {e.motivoSolicitud && <div className="text-[11px] text-slate-500 italic truncate">“{e.motivoSolicitud}”</div>}
+              </div>
+              <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ${EXC_COLOR[e.estado]}`}>{e.estado}</span>
+              {puedeAutorizar && e.estado === 'PENDIENTE' && (
+                <span className="flex gap-1 ml-1 shrink-0">
+                  <button className="btn-accent !py-1 !px-2 text-xs" onClick={() => resolver(e.id, true)}>Aprobar</button>
+                  <button className="btn-ghost !py-1 !px-2 text-xs !text-red-600" onClick={() => resolver(e.id, false)}>Rechazar</button>
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-slate-400 mb-2">Sin solicitudes de excepción.</p>
+      )}
+
+      {editable && (
+        <div className="border-t border-slate-100 pt-4 mt-2">
+          <h3 className="text-xs font-semibold text-slate-400 uppercase mb-2">Solicitar autorización</h3>
+          <div className="grid sm:grid-cols-[1fr_auto_auto] gap-2 items-end">
+            <Field label="ISBN">
+              <input className="input" value={isbn} onChange={(ev) => setIsbn(ev.target.value)} placeholder="ISBN del libro" />
+            </Field>
+            <Field label="Cantidad">
+              <input className="input w-24 tabnum" type="number" min={1} value={cantidad} onChange={(ev) => setCantidad(ev.target.value)} />
+            </Field>
+            <button className="btn-accent" disabled={busy || !isbn.trim()} onClick={solicitar}>Solicitar</button>
+          </div>
+          <div className="mt-2">
+            <Field label="Motivo (opcional)">
+              <input className="input" value={motivo} onChange={(ev) => setMotivo(ev.target.value)} placeholder="Por qué se devuelve fuera de consignación" />
+            </Field>
+          </div>
+        </div>
+      )}
     </Card>
   );
 }

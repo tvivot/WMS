@@ -17,6 +17,7 @@ export const PERMISOS = {
   DEVOLUCION_CORREGIR: 'devolucion.corregir',
   DEVOLUCION_STOCK_VER: 'devolucion.stock.ver',
   CONSIGNACION_IMPORTAR: 'consignacion.importar',
+  DEVOLUCION_AUTORIZAR_EXCEPCION: 'devolucion.autorizar_excepcion',
 } as const;
 
 export type PermisoCodigo = (typeof PERMISOS)[keyof typeof PERMISOS];
@@ -39,6 +40,8 @@ export const PERMISOS_DESCRIPCION: Record<string, string> = {
     'Ver el stock de libros en devoluciones (ingresadas, sin procesar)',
   [PERMISOS.CONSIGNACION_IMPORTAR]:
     'Importar el saldo en consignación desde el ERP (integrador)',
+  [PERMISOS.DEVOLUCION_AUTORIZAR_EXCEPCION]:
+    'Autorizar devolución de libros fuera de la consignación del cliente',
 };
 
 const TODOS = Object.values(PERMISOS);
@@ -69,6 +72,7 @@ export const ROLES_DEFAULT: Array<{
       PERMISOS.TRANSPORTISTA_ADMINISTRAR,
       PERMISOS.INFORMES_VER,
       PERMISOS.DEVOLUCION_STOCK_VER,
+      PERMISOS.DEVOLUCION_AUTORIZAR_EXCEPCION,
     ],
   },
   {
