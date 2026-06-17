@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   BarChart3,
   BookOpen,
+  Boxes,
   Building2,
   ClipboardList,
   LogOut,
@@ -28,6 +29,7 @@ interface NavItem {
 
 const ITEMS: NavItem[] = [
   { to: '/devoluciones', label: 'Devoluciones', icon: ClipboardList },
+  { to: '/stock-devoluciones', label: 'Stock Devol.', icon: Boxes, permiso: PERMISOS.DEVOLUCION_STOCK_VER },
   { to: '/informes', label: 'Informes', icon: BarChart3, permiso: PERMISOS.INFORMES_VER },
   { to: '/catalogo', label: 'Catálogo', icon: BookOpen, permiso: PERMISOS.CATALOGO_ADMINISTRAR },
   { to: '/clientes', label: 'Clientes', icon: Building2, permiso: PERMISOS.CLIENTE_ADMINISTRAR },

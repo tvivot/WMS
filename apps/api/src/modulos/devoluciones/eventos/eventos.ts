@@ -31,8 +31,9 @@ export interface DevolucionProcesadaEvent {
   clienteId: number;
   depositoId: number;
   reconciliacion: ReconciliacionLinea[];
-  ubicacionDestinoBueno: string;
-  ubicacionDestinoMalo: string;
+  /** Informativas: pueden venir vacías (las ubicaciones no son obligatorias). */
+  ubicacionDestinoBueno?: string;
+  ubicacionDestinoMalo?: string;
   /** true cuando re-emite por una corrección post-Procesado (reemplaza el resultado anterior). */
   correccion?: boolean;
   ts: string;

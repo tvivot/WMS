@@ -47,4 +47,5 @@ export const PERMISOS = {
   INFORMES_VER: 'informes.ver',
   TRANSPORTISTA_ADMINISTRAR: 'transportista.administrar',
   DEVOLUCION_CORREGIR: 'devolucion.corregir',
+  DEVOLUCION_STOCK_VER: 'devolucion.stock.ver',
 } as const;

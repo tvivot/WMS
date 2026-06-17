@@ -122,7 +122,7 @@ const AYUDA_DETALLE: AyudaPantalla = {
       titulo: 'Paso 4 — Ingreso a depósito (Depósito)',
       solo: 'interno',
       pasos: [
-        'Indicá en qué ubicación física quedan los bultos esperando el control (por ejemplo "DEV-01").',
+        'Si querés, indicá en qué ubicación física quedan los bultos esperando el control (por ejemplo "DEV-01"). Es opcional e informativo: podés registrar el ingreso sin completarla.',
         'Al registrar, la devolución pasa a "Ingreso a depósito" y ya se puede controlar.',
       ],
     },
@@ -144,7 +144,7 @@ const AYUDA_DETALLE: AyudaPantalla = {
       solo: 'interno',
       pasos: [
         'Solo se puede cerrar cuando TODOS los bultos figuran como controlados.',
-        'Indicá a qué ubicación van los libros buenos (estantería de venta o pallet) y a cuál van los dañados (zona de dañados o cuarentena).',
+        'Si querés, indicá a qué ubicación van los libros buenos (estantería de venta o pallet) y a cuál van los dañados (zona de dañados o cuarentena). Son datos informativos y opcionales: podés cerrar y procesar sin completarlos.',
         'Si la suma de los pesos de los bultos no coincide con el peso declarado, el sistema pide una observación.',
         'Al tocar "Cerrar y procesar", la devolución queda "Procesada" y se muestra la reconciliación: por cada título, cuánto se declaró, cuánto llegó, cuánto bueno y cuánto malo.',
       ],
@@ -363,7 +363,33 @@ const AYUDA_CONFIGURACION: AyudaPantalla = {
   ],
 };
 
+const AYUDA_STOCK: AyudaPantalla = {
+  titulo: 'Stock de Devoluciones',
+  intro:
+    'Muestra qué libros hay físicamente en el depósito provenientes de devoluciones que todavía no se procesaron, y en qué devolución está cada uno.',
+  secciones: [
+    {
+      titulo: 'Qué cuenta como stock acá',
+      parrafos: [
+        'Aparecen los libros de las devoluciones que ya llegaron al depósito (estados "Entregado" e "Ingreso a depósito") y aún no se cerraron.',
+        'La cantidad mostrada es la DECLARADA por el cliente ("en principio" lo que viene en los bultos). El conteo real bulto por bulto se ve al controlar y procesar la devolución.',
+        'Cuando una devolución se PROCESA, sus libros dejan de aparecer en este stock: a partir de ahí el stock real lo lleva el módulo de Inventario.',
+      ],
+    },
+    {
+      titulo: 'Buscar un libro y ver dónde está',
+      pasos: [
+        'Usá el buscador de la grilla para encontrar un libro por título o ISBN.',
+        'Hacé doble clic sobre el libro para abrir el detalle.',
+        'El detalle lista en qué devoluciones está ese libro, con la cantidad por devolución y el contenido completo (todos los libros y cantidades) de cada una.',
+        'Desde ahí podés abrir la devolución con el número (#) para operarla.',
+      ],
+    },
+  ],
+};
+
 const POR_RUTA: { prefijo: string; ayuda: AyudaPantalla }[] = [
+  { prefijo: '/stock-devoluciones', ayuda: AYUDA_STOCK },
   { prefijo: '/devoluciones/', ayuda: AYUDA_DETALLE },
   { prefijo: '/devoluciones', ayuda: AYUDA_LISTA },
   { prefijo: '/informes', ayuda: AYUDA_INFORMES },

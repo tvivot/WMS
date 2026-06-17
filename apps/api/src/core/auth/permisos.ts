@@ -15,6 +15,7 @@ export const PERMISOS = {
   CATALOGO_ADMINISTRAR: 'catalogo.administrar',
   TRANSPORTISTA_ADMINISTRAR: 'transportista.administrar',
   DEVOLUCION_CORREGIR: 'devolucion.corregir',
+  DEVOLUCION_STOCK_VER: 'devolucion.stock.ver',
 } as const;
 
 export type PermisoCodigo = (typeof PERMISOS)[keyof typeof PERMISOS];
@@ -33,6 +34,8 @@ export const PERMISOS_DESCRIPCION: Record<string, string> = {
   [PERMISOS.TRANSPORTISTA_ADMINISTRAR]: 'Administrar transportistas',
   [PERMISOS.DEVOLUCION_CORREGIR]:
     'Corregir devoluciones ya procesadas (queda en auditoría)',
+  [PERMISOS.DEVOLUCION_STOCK_VER]:
+    'Ver el stock de libros en devoluciones (ingresadas, sin procesar)',
 };
 
 const TODOS = Object.values(PERMISOS);
@@ -50,6 +53,7 @@ export const ROLES_DEFAULT: Array<{
       PERMISOS.SOLICITUD_CREAR,
       PERMISOS.SOLICITUD_APROBAR,
       PERMISOS.INFORMES_VER,
+      PERMISOS.DEVOLUCION_STOCK_VER,
     ],
   },
   {
@@ -61,6 +65,7 @@ export const ROLES_DEFAULT: Array<{
       PERMISOS.CLIENTE_ADMINISTRAR,
       PERMISOS.TRANSPORTISTA_ADMINISTRAR,
       PERMISOS.INFORMES_VER,
+      PERMISOS.DEVOLUCION_STOCK_VER,
     ],
   },
   {
@@ -70,6 +75,7 @@ export const ROLES_DEFAULT: Array<{
       PERMISOS.DEPOSITO_RECIBIR,
       PERMISOS.DEPOSITO_INGRESAR,
       PERMISOS.DEPOSITO_CONTROLAR,
+      PERMISOS.DEVOLUCION_STOCK_VER,
     ],
   },
   {

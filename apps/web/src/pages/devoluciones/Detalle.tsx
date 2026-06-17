@@ -282,8 +282,9 @@ function PanelIngreso({ id, onAccion }: { id: number; onAccion: (fn: () => Promi
   return (
     <Card>
       <h2 className="font-semibold mb-3">Ingreso a depósito</h2>
-      <Field label="Ubicación de espera"><input className="input" value={ubi} onChange={(e) => setUbi(e.target.value)} placeholder="Ej: DEV-01" /></Field>
-      <button className="btn-accent mt-4" onClick={() => onAccion(() => api.patch(`/devoluciones/autorizaciones/${id}/ingreso`, { ubicacionEspera: ubi }))}>
+      <Field label="Ubicación de espera (opcional)"><input className="input" value={ubi} onChange={(e) => setUbi(e.target.value)} placeholder="Ej: DEV-01" /></Field>
+      <p className="text-xs text-slate-400 mt-1.5">Informativa: podés registrar el ingreso sin completarla.</p>
+      <button className="btn-accent mt-4" onClick={() => onAccion(() => api.patch(`/devoluciones/autorizaciones/${id}/ingreso`, { ubicacionEspera: ubi || undefined }))}>
         Registrar ingreso
       </button>
     </Card>
@@ -300,7 +301,7 @@ function PanelControl({ d, onDone, onError }: { d: Detalle; onDone: () => void; 
   const cerrar = async () => {
     try {
       await api.patch(`/devoluciones/autorizaciones/${d.id}/cierre`, {
-        ubicacionDestinoBueno: destBueno, ubicacionDestinoMalo: destMalo, observaciones: obs || undefined,
+        ubicacionDestinoBueno: destBueno || undefined, ubicacionDestinoMalo: destMalo || undefined, observaciones: obs || undefined,
       });
       onDone();
     } catch (e) {
@@ -341,9 +342,10 @@ function PanelControl({ d, onDone, onError }: { d: Detalle; onDone: () => void; 
 
       <div className="mt-5 pt-5 border-t border-slate-100">
         <h3 className="font-semibold mb-3">Cierre → destinos</h3>
+        <p className="text-xs text-slate-400 mb-3">Las ubicaciones son informativas: podés cerrar y procesar sin completarlas.</p>
         <div className="grid sm:grid-cols-2 gap-3">
-          <Field label="Destino BUENOS (picking/pallet)"><input className="input" value={destBueno} onChange={(e) => setDestBueno(e.target.value)} placeholder="Ej: A-01" /></Field>
-          <Field label="Destino MALOS (dañados/cuarentena)"><input className="input" value={destMalo} onChange={(e) => setDestMalo(e.target.value)} placeholder="Ej: DAN-01" /></Field>
+          <Field label="Destino BUENOS (picking/pallet) — opcional"><input className="input" value={destBueno} onChange={(e) => setDestBueno(e.target.value)} placeholder="Ej: A-01" /></Field>
+          <Field label="Destino MALOS (dañados/cuarentena) — opcional"><input className="input" value={destMalo} onChange={(e) => setDestMalo(e.target.value)} placeholder="Ej: DAN-01" /></Field>
         </div>
         <Field label="Observación (si peso/bultos difieren)"><input className="input mt-1" value={obs} onChange={(e) => setObs(e.target.value)} /></Field>
         <button className="btn-accent mt-4 disabled:opacity-50" disabled={!todosControlados} onClick={cerrar}>
@@ -484,7 +486,7 @@ function PanelReconciliacion({ id, d }: { id: number; d: Detalle }) {
   return (
     <Card>
       <h2 className="font-semibold mb-1 flex items-center gap-2 text-emerald-700"><CheckCircle2 className="h-5 w-5" /> Procesado</h2>
-      <p className="text-sm text-slate-500 mb-4">Buenos → {d.ubicacionDestinoBueno} · Malos → {d.ubicacionDestinoMalo}</p>
+      <p className="text-sm text-slate-500 mb-4">Buenos → {d.ubicacionDestinoBueno || '—'} · Malos → {d.ubicacionDestinoMalo || '—'}</p>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="text-slate-500 text-left"><tr>

@@ -11,6 +11,7 @@ import { Configuracion } from './pages/Configuracion';
 import { Informes } from './pages/Informes';
 import { DevolucionesLista } from './pages/devoluciones/Lista';
 import { DevolucionDetalle } from './pages/devoluciones/Detalle';
+import { StockDevoluciones } from './pages/devoluciones/Stock';
 import { Spinner } from './components/ui';
 
 function Protegido({ children }: { children: React.ReactNode }) {
@@ -39,6 +40,7 @@ export default function App() {
             }
           >
             <Route path="/devoluciones" element={<DevolucionesLista />} />
+            <Route path="/stock-devoluciones" element={<StockDevoluciones />} />
             <Route path="/devoluciones/:id" element={<DevolucionDetalle />} />
             <Route path="/informes" element={<Informes />} />
             <Route path="/catalogo" element={<Catalogo />} />

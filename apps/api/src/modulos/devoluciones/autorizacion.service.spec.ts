@@ -365,6 +365,54 @@ describe('AutorizacionService — máquina de estados', () => {
     ).rejects.toThrow(/sin controlar/);
   });
 
+  it('las ubicaciones son informativas: se ingresa y se procesa sin cargarlas', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.ENTREGADO);
+    // Ingreso SIN ubicación de espera.
+    const ing = await ctx.svc.ingreso(deposito, id, {});
+    expect(ing.estado).toBe(DevEstado.INGRESO_DEPOSITO);
+    expect(ing.ubicacionEspera).toBeNull();
+    await ctx.svc.controlarBulto(deposito, id, 1, {
+      peso: 6,
+      controles: [
+        { isbn: ISBN_A, cantidad: 2 },
+        { isbn: ISBN_B, cantidad: 1 },
+      ],
+    });
+    await ctx.svc.controlarBulto(deposito, id, 2, {
+      peso: 4,
+      controles: [
+        { isbn: ISBN_B, cantidad: 2 },
+        { isbn: ISBN_C, cantidad: 5 },
+      ],
+    });
+    // Cierre SIN ubicaciones destino.
+    const r = await ctx.svc.cerrar(deposito, id, {});
+    expect(r.autorizacion.estado).toBe(DevEstado.PROCESADO);
+    expect(r.autorizacion.ubicacionDestinoBueno).toBeNull();
+    expect(r.autorizacion.ubicacionDestinoMalo).toBeNull();
+  });
+
+  it('una ubicación cargada se guarda (recortada); en blanco queda null', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
+    await ctx.svc.controlarBulto(deposito, id, 1, {
+      peso: 6,
+      controles: [{ isbn: ISBN_A, cantidad: 2 }, { isbn: ISBN_B, cantidad: 1 }],
+    });
+    await ctx.svc.controlarBulto(deposito, id, 2, {
+      peso: 4,
+      controles: [{ isbn: ISBN_B, cantidad: 2 }, { isbn: ISBN_C, cantidad: 5 }],
+    });
+    // Buenos: se carga (con espacios → se recorta). Malos: en blanco → null.
+    const r = await ctx.svc.cerrar(deposito, id, {
+      ubicacionDestinoBueno: '  A-01  ',
+      ubicacionDestinoMalo: '   ',
+    });
+    expect(r.autorizacion.ubicacionDestinoBueno).toBe('A-01');
+    expect(r.autorizacion.ubicacionDestinoMalo).toBeNull();
+  });
+
   it('diferencia de peso exige observación PROPIA del cierre (una previa no alcanza)', async () => {
     const ctx = crearServicio();
     const id = await avanzarHasta(ctx, DevEstado.EN_TRANSITO);

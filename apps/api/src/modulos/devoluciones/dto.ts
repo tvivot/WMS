@@ -67,8 +67,10 @@ export class RecibirDto {
 }
 
 export class IngresoDto {
+  // Informativa: opcional. Si se carga, el puerto la valida.
+  @IsOptional()
   @IsString()
-  ubicacionEspera!: string;
+  ubicacionEspera?: string;
 }
 
 export class LineaControlDto {
@@ -108,11 +110,14 @@ export class CorregirControlDto extends ControlarBultoDto {
 }
 
 export class CerrarDto {
+  // Destinos informativos: opcionales para procesar. Si se cargan, el puerto los valida.
+  @IsOptional()
   @IsString()
-  ubicacionDestinoBueno!: string;
+  ubicacionDestinoBueno?: string;
 
+  @IsOptional()
   @IsString()
-  ubicacionDestinoMalo!: string;
+  ubicacionDestinoMalo?: string;
 
   @IsOptional()
   @IsString()

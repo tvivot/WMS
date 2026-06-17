@@ -31,6 +31,7 @@ import {
 } from './eventos/eventos';
 import {
   UBICACION_RESOLVER,
+  type TipoUbicacion,
   type UbicacionResolverPort,
 } from './puertos/ubicacion-resolver.port';
 
@@ -289,16 +290,35 @@ export class AutorizacionService {
     });
   }
 
-  /** Ingreso a depósito: registra ubicación de espera (vía puerto). */
+  /**
+   * Las ubicaciones son INFORMATIVAS: opcionales al ingresar/cerrar, no bloquean.
+   * Si se carga una, se valida por el puerto (así el futuro módulo Ubicaciones
+   * sigue mandando y el seam no se rompe); si viene vacía, se guarda null.
+   */
+  private async ubicacionOpcional(
+    codigo: string | undefined,
+    tipo: TipoUbicacion,
+    etiqueta: string,
+  ): Promise<string | null> {
+    const limpio = codigo?.trim();
+    if (!limpio) return null;
+    if (!(await this.ubicaciones.esValidaPara(limpio, tipo))) {
+      throw new BadRequestException(`${etiqueta} inválida`);
+    }
+    return limpio;
+  }
+
+  /** Ingreso a depósito: registra ubicación de espera (informativa, vía puerto). */
   async ingreso(actor: JwtPayload, id: number, dto: IngresoDto) {
     const a = await this.obtenerOr404(id);
     this.exigirEstado(a.estado, DevEstado.ENTREGADO);
-    const valida = await this.ubicaciones.esValidaPara(dto.ubicacionEspera, 'devoluciones');
-    if (!valida) {
-      throw new BadRequestException('Ubicación de espera inválida');
-    }
+    const ubicacionEspera = await this.ubicacionOpcional(
+      dto.ubicacionEspera,
+      'devoluciones',
+      'Ubicación de espera',
+    );
     return this.transicionar(id, actor, a.estado, DevEstado.INGRESO_DEPOSITO, {
-      ubicacionEspera: dto.ubicacionEspera,
+      ubicacionEspera,
     });
   }
 
@@ -409,12 +429,18 @@ export class AutorizacionService {
       );
     }
 
-    // Ubicaciones destino (vía puerto): buenos a picking/pallet, malos a dañados/cuarentena.
-    const okBueno = await this.ubicaciones.esValidaPara(dto.ubicacionDestinoBueno, 'picking');
-    const okMalo = await this.ubicaciones.esValidaPara(dto.ubicacionDestinoMalo, 'dañados');
-    if (!okBueno || !okMalo) {
-      throw new BadRequestException('Ubicación destino inválida');
-    }
+    // Ubicaciones destino INFORMATIVAS (opcionales): buenos a picking/pallet,
+    // malos a dañados/cuarentena. No bloquean el cierre; si se cargan, se validan.
+    const ubicacionDestinoBueno = await this.ubicacionOpcional(
+      dto.ubicacionDestinoBueno,
+      'picking',
+      'Ubicación destino (buenos)',
+    );
+    const ubicacionDestinoMalo = await this.ubicacionOpcional(
+      dto.ubicacionDestinoMalo,
+      'dañados',
+      'Ubicación destino (malos)',
+    );
 
     // Control de peso: suma de bultos vs peso total declarado (no bloquea, exige observación).
     const sumaPesos = bultos.reduce((acc, b) => acc + (b.peso ? Number(b.peso) : 0), 0);
@@ -439,8 +465,8 @@ export class AutorizacionService {
       a.estado,
       DevEstado.PROCESADO,
       {
-        ubicacionDestinoBueno: dto.ubicacionDestinoBueno,
-        ubicacionDestinoMalo: dto.ubicacionDestinoMalo,
+        ubicacionDestinoBueno,
+        ubicacionDestinoMalo,
         observaciones: this.acumularObservacion(a.observaciones, 'Cierre', dto.observaciones),
       },
     );
@@ -450,8 +476,8 @@ export class AutorizacionService {
       clienteId: a.clienteId,
       depositoId: a.depositoId,
       reconciliacion,
-      ubicacionDestinoBueno: dto.ubicacionDestinoBueno,
-      ubicacionDestinoMalo: dto.ubicacionDestinoMalo,
+      ubicacionDestinoBueno: ubicacionDestinoBueno ?? undefined,
+      ubicacionDestinoMalo: ubicacionDestinoMalo ?? undefined,
       ts: new Date().toISOString(),
     };
     // NO mueve stock: solo registra destino y emite el evento (lo consume Inventario).
@@ -514,8 +540,8 @@ export class AutorizacionService {
       clienteId: a.clienteId,
       depositoId: a.depositoId,
       reconciliacion,
-      ubicacionDestinoBueno: a.ubicacionDestinoBueno ?? '',
-      ubicacionDestinoMalo: a.ubicacionDestinoMalo ?? '',
+      ubicacionDestinoBueno: a.ubicacionDestinoBueno ?? undefined,
+      ubicacionDestinoMalo: a.ubicacionDestinoMalo ?? undefined,
       correccion: true,
       ts: new Date().toISOString(),
     };
