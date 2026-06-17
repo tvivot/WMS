@@ -305,3 +305,26 @@ model DevControl {
   @@index([bultoId])
   @@map("dev_control")
 }
+
+/// Saldo en consignación por cliente + ISBN, importado del ERP por el
+/// integrador (vía Integraciones → ConsignacionPort). Insumo de la
+/// reconciliación: cuánto tiene el cliente "en depósito" sin comprar. NO
+/// bloquea; si una devolución lo excede, se exige observación.
+/// Referencias al núcleo por ID (sin FK cruzada), como DevAutorizacion.
+/// Semántica snapshot: full-replace por cliente en cada carga (idempotente);
+/// snapshotTs descarta cargas que llegan fuera de orden.
+model DevConsignacionSaldo {
+  id         Int      @id @default(autoincrement())
+  clienteId  Int      @map("cliente_id")
+  isbn       String   @db.VarChar(20)
+  productoId Int?     @map("producto_id")
+  cantidad   Int
+  snapshotTs DateTime @map("snapshot_ts")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@unique([clienteId, isbn], name: "cliente_isbn")
+  @@index([clienteId])
+  @@index([isbn])
+  @@map("dev_consignacion_saldo")
+}
