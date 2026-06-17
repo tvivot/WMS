@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, ParseIntPipe, Query } from '@nestjs/common';
 import { RequierePermiso } from '../../../core/auth/decoradores';
 import { PERMISOS } from '../../../core/auth/permisos';
 import { InformesService } from './informes.service';
@@ -21,5 +21,17 @@ export class InformesController {
   @Get('serie')
   serie() {
     return this.svc.serie();
+  }
+
+  /** Clientes con consignación activa (cantidad de libros/títulos). */
+  @Get('consignacion')
+  consignacion() {
+    return this.svc.consignacionPorCliente();
+  }
+
+  /** Drill-down: libros que un cliente tiene en consignación. */
+  @Get('consignacion/detalle')
+  consignacionDetalle(@Query('clienteId', ParseIntPipe) clienteId: number) {
+    return this.svc.consignacionDetalle(clienteId);
   }
 }
