@@ -117,7 +117,13 @@ function crearFakePrisma() {
       count: async ({ where }: any) =>
         db.declaraciones.filter((d) => d.autorizacionId === where.autorizacionId).length,
       findMany: async ({ where }: any) =>
-        db.declaraciones.filter((d) => d.autorizacionId === where.autorizacionId).map((x) => ({ ...x })),
+        db.declaraciones
+          .filter((d: any) =>
+            where.autorizacionId?.in
+              ? where.autorizacionId.in.includes(d.autorizacionId)
+              : d.autorizacionId === where.autorizacionId,
+          )
+          .map((x) => ({ ...x })),
     },
     devBulto: {
       deleteMany: async ({ where }: any) => {
@@ -228,6 +234,8 @@ function crearFakePrisma() {
         const t = db.transportistas.find((x) => x.id === where.id);
         return t ? { ...t } : null;
       },
+      findMany: async ({ where }: any) =>
+        db.transportistas.filter((t) => where.id.in.includes(t.id)).map((x) => ({ ...x })),
     },
     producto: {
       findMany: async ({ where }: any) =>
@@ -351,6 +359,102 @@ async function avanzarHasta(ctx: ReturnType<typeof crearServicio>, hasta: DevEst
   });
   return a.id;
 }
+
+describe('AutorizacionService — borrador (guardar parcial) y despacho', () => {
+  it('guarda un borrador con solo líneas (sin bultos/peso/transportista)', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    ctx.consignacion.set(10, ISBN_A, 2);
+    const det = await ctx.svc.declarar(clienteX, id, {
+      lineas: [{ isbn: ISBN_A, cantidad: 2 }],
+    });
+    expect(det.declaraciones).toHaveLength(1);
+    expect(det.bultosDeclarados).toBeNull();
+    expect(det.pesoTotalDeclarado).toBeNull();
+    expect(det.transportistaId).toBeNull();
+  });
+
+  it('merge: guardar solo líneas NO pisa bultos/peso/transportista ya cargados', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    ctx.consignacion.set(10, ISBN_A, 5);
+    // 1) Guardado completo.
+    await ctx.svc.declarar(clienteX, id, {
+      lineas: [{ isbn: ISBN_A, cantidad: 2 }],
+      bultosDeclarados: 3,
+      pesoTotalDeclarado: 12,
+      transportistaId: 5,
+    });
+    // 2) Guardado parcial: SOLO líneas (sin bultos/peso/transportista).
+    const det = await ctx.svc.declarar(clienteX, id, {
+      lineas: [{ isbn: ISBN_A, cantidad: 4 }],
+    });
+    expect(det.declaraciones[0].cantidad).toBe(4); // las líneas sí se reemplazan
+    expect(det.bultosDeclarados).toBe(3); // lo omitido se preserva
+    expect(Number(det.pesoTotalDeclarado)).toBe(12);
+    expect(det.transportistaId).toBe(5);
+  });
+
+  it('merge: guardar solo bultos/peso NO borra las líneas ya cargadas', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    ctx.consignacion.set(10, ISBN_A, 5);
+    await ctx.svc.declarar(clienteX, id, { lineas: [{ isbn: ISBN_A, cantidad: 2 }] });
+    // No mando lineas: no se deben tocar.
+    const det = await ctx.svc.declarar(clienteX, id, { bultosDeclarados: 2, pesoTotalDeclarado: 5 });
+    expect(det.declaraciones).toHaveLength(1);
+    expect(det.declaraciones[0].cantidad).toBe(2);
+    expect(det.bultosDeclarados).toBe(2);
+  });
+
+  it('no despacha un borrador incompleto (faltan bultos/peso/transportista)', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    ctx.consignacion.set(10, ISBN_A, 2);
+    await ctx.svc.declarar(clienteX, id, { lineas: [{ isbn: ISBN_A, cantidad: 2 }] });
+    await expect(ctx.svc.despachar(clienteX, id)).rejects.toThrow(/Faltan datos/);
+  });
+
+  it('permite guardar varias veces y despachar al completar', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    ctx.consignacion.set(10, ISBN_A, 5);
+    // 1ª pasada: solo líneas
+    await ctx.svc.declarar(clienteX, id, { lineas: [{ isbn: ISBN_A, cantidad: 2 }] });
+    // 2ª pasada: ajusta líneas + completa bultos/peso/transportista (reemplazo)
+    const det = await ctx.svc.declarar(clienteX, id, {
+      lineas: [{ isbn: ISBN_A, cantidad: 3 }],
+      bultosDeclarados: 1,
+      pesoTotalDeclarado: 4,
+      transportistaId: 5,
+    });
+    expect(det.declaraciones).toHaveLength(1);
+    expect(det.declaraciones[0].cantidad).toBe(3);
+    const desp = await ctx.svc.despachar(clienteX, id);
+    expect(desp.estado).toBe(DevEstado.EN_TRANSITO);
+  });
+});
+
+describe('AutorizacionService — export a Excel', () => {
+  it('genera un .xlsx (firma ZIP PK) con las devoluciones del cliente', async () => {
+    const ctx = crearServicio();
+    await avanzarHasta(ctx, DevEstado.EN_TRANSITO); // una devolución con líneas + transportista
+    const buf = await ctx.svc.exportarExcel(clienteX, {});
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    // .xlsx es un ZIP: empieza con "PK\x03\x04".
+    expect(buf.subarray(0, 2).toString('latin1')).toBe('PK');
+    expect(buf.length).toBeGreaterThan(0);
+  });
+
+  it('un cliente solo exporta lo suyo (no ve lo de otro cliente)', async () => {
+    const ctx = crearServicio();
+    await avanzarHasta(ctx, DevEstado.EN_TRANSITO); // del cliente 10
+    // Export desde el cliente ajeno (11): no debe fallar y no incluye datos del 10.
+    const buf = await ctx.svc.exportarExcel(clienteAjeno, {});
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.subarray(0, 2).toString('latin1')).toBe('PK');
+  });
+});
 
 describe('AutorizacionService — máquina de estados', () => {
   it('no permite aprobar dos veces (transición inválida)', async () => {

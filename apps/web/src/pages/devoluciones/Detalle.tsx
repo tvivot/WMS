@@ -163,6 +163,7 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
   const [transportistaId, setTransportistaId] = useState<string>(
     d.transportistaId ? String(d.transportistaId) : '',
   );
+  const [guardado, setGuardado] = useState(false);
 
   useEffect(() => {
     api.get<TransportistaOpcion[]>('/transportistas').then(setTransportistas).catch(() => setTransportistas([]));
@@ -170,6 +171,7 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
 
   // Suma una unidad del producto (autosuma si el ISBN ya está en la lista).
   const sumar = (p: ProductoLite) => {
+    setGuardado(false);
     setLineas((prev) => {
       const i = prev.findIndex((l) => l.isbn === p.isbn);
       if (i >= 0) {
@@ -191,13 +193,14 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
     }
   };
 
-  // Lanza si falla: quien la llame decide (el botón muestra el error;
-  // "despachar" NO debe seguir si el guardado falló).
+  // Guarda como BORRADOR: manda lo que haya. Bultos/peso vacíos van como undefined
+  // (no se exigen hasta despachar). Lanza si falla: quien la llame decide (el botón
+  // muestra el error; "despachar" NO debe seguir si el guardado falló).
   const guardarOLanzar = async () => {
     await api.patch(`/devoluciones/autorizaciones/${d.id}/declaracion`, {
       lineas: lineas.map((l) => ({ isbn: l.isbn, cantidad: l.cantidad })),
-      bultosDeclarados: Number(bultos),
-      pesoTotalDeclarado: Number(peso),
+      bultosDeclarados: bultos.trim() ? Number(bultos) : undefined,
+      pesoTotalDeclarado: peso.trim() ? Number(peso) : undefined,
       transportistaId: transportistaId ? Number(transportistaId) : undefined,
     });
   };
@@ -205,12 +208,26 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
   const guardar = async () => {
     try {
       await guardarOLanzar();
+      setGuardado(true);
       onDone();
     } catch (e) {
       onError((e as Error).message);
     }
   };
   const despachar = async () => {
+    // Pre-checks con mensajes claros (el backend igual valida el gate completo).
+    if (lineas.length === 0) {
+      onError('Cargá al menos un libro antes de despachar.');
+      return;
+    }
+    if (!bultos.trim() || Number(bultos) < 1) {
+      onError('Indicá la cantidad de bultos antes de despachar.');
+      return;
+    }
+    if (!peso.trim()) {
+      onError('Indicá el peso total antes de despachar.');
+      return;
+    }
     if (!transportistaId) {
       onError('Elegí el transportista antes de despachar.');
       return;
@@ -226,7 +243,11 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
 
   return (
     <Card>
-      <h2 className="font-semibold mb-3">Declarar devolución</h2>
+      <h2 className="font-semibold mb-1">Declarar devolución</h2>
+      <p className="text-sm text-slate-500 mb-3">
+        Cargá los libros y guardá cuando quieras: la devolución queda editable hasta que la
+        despaches. Al <b>despachar</b> la cerrás (pasa a <i>En tránsito</i>) y ya no se modifica.
+      </p>
       <Scanner onScan={agregar} onElegir={sumar} />
       <div className="mt-4 space-y-2">
         {lineas.map((l, i) => (
@@ -238,7 +259,7 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
             </span>
             <input
               type="number" min={1} value={l.cantidad}
-              onChange={(e) => setLineas((p) => p.map((x, j) => (j === i ? { ...x, cantidad: Number(e.target.value) } : x)))}
+              onChange={(e) => { setGuardado(false); setLineas((p) => p.map((x, j) => (j === i ? { ...x, cantidad: Number(e.target.value) } : x))); }}
               className="input w-20 h-9 tabnum text-center"
             />
           </div>
@@ -246,12 +267,12 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
         {lineas.length === 0 && <p className="text-sm text-slate-400">Escaneá o buscá un ISBN para sumar líneas.</p>}
       </div>
       <div className="grid grid-cols-2 gap-3 mt-4">
-        <Field label="Bultos"><input className="input tabnum" inputMode="numeric" value={bultos} onChange={(e) => setBultos(e.target.value)} /></Field>
-        <Field label="Peso total (kg)"><input className="input tabnum" inputMode="decimal" value={peso} onChange={(e) => setPeso(e.target.value)} /></Field>
+        <Field label="Bultos"><input className="input tabnum" inputMode="numeric" value={bultos} onChange={(e) => { setGuardado(false); setBultos(e.target.value); }} /></Field>
+        <Field label="Peso total (kg)"><input className="input tabnum" inputMode="decimal" value={peso} onChange={(e) => { setGuardado(false); setPeso(e.target.value); }} /></Field>
       </div>
       <div className="mt-3">
         <Field label="Transportista" hint={transportistas.length === 0 ? 'No hay transportistas cargados: pedile al depósito que cargue uno.' : undefined}>
-          <select className="input" value={transportistaId} onChange={(e) => setTransportistaId(e.target.value)}>
+          <select className="input" value={transportistaId} onChange={(e) => { setGuardado(false); setTransportistaId(e.target.value); }}>
             <option value="">Elegir transportista…</option>
             {transportistas.map((t) => (
               <option key={t.id} value={t.id}>{t.nombre}</option>
@@ -259,11 +280,16 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
           </select>
         </Field>
       </div>
-      <div className="flex gap-3 mt-4">
+      <div className="flex items-center gap-3 mt-4">
         <button className="btn-outline" onClick={guardar}>Guardar</button>
         <button className="btn-accent" onClick={despachar}>
           <Truck className="h-4 w-4" /> Despachar
         </button>
+        {guardado && (
+          <span className="inline-flex items-center gap-1 text-sm text-brand-green-ink">
+            <CheckCircle2 className="h-4 w-4" /> Guardado
+          </span>
+        )}
       </div>
     </Card>
   );

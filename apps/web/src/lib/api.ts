@@ -67,6 +67,37 @@ async function upload<T>(path: string, form: FormData): Promise<T> {
   return data as T;
 }
 
+/** Descarga un archivo (con Authorization) y dispara el "Guardar como" del browser. */
+async function download(path: string, filename: string): Promise<void> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetch(`/api${path}`, { headers });
+  if (res.status === 401) clearToken();
+  if (!res.ok) {
+    // El error puede venir como JSON (texto) aunque la ruta sea binaria.
+    let msg = `Error ${res.status}`;
+    try {
+      const data = JSON.parse(await res.text());
+      msg = (data && (data.message?.toString?.() ?? data.error)) || msg;
+    } catch {
+      /* respuesta vacía o no-JSON */
+    }
+    throw new ApiError(res.status, Array.isArray(msg) ? msg.join(', ') : msg);
+  }
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export const api = {
   get: <T>(p: string) => request<T>('GET', p),
   post: <T>(p: string, b?: unknown) => request<T>('POST', p, b),
@@ -74,4 +105,5 @@ export const api = {
   patch: <T>(p: string, b?: unknown) => request<T>('PATCH', p, b),
   delete: <T>(p: string) => request<T>('DELETE', p),
   upload,
+  download,
 };

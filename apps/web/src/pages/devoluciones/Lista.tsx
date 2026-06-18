@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { CheckCircle2, Plus } from 'lucide-react';
+import { CheckCircle2, Download, Plus } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
@@ -79,6 +79,7 @@ export function DevolucionesLista() {
   const [cliente, setCliente] = useState<ClienteOpcion | null>(null);
   const [filtro, setFiltro] = useState<Estado | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [exportando, setExportando] = useState(false);
 
   const cargar = () => {
     setItems(null);
@@ -101,6 +102,21 @@ export function DevolucionesLista() {
       cargar();
     } catch (err) {
       setError((err as Error).message);
+    }
+  };
+
+  // Export a Excel: respeta el filtro de estado activo. El backend filtra por
+  // propiedad (un cliente solo baja lo suyo).
+  const exportar = async () => {
+    setError(null);
+    setExportando(true);
+    try {
+      const q = filtro ? `?estado=${filtro}` : '';
+      await api.download(`/devoluciones/autorizaciones/export.xlsx${q}`, 'devoluciones.xlsx');
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setExportando(false);
     }
   };
 
@@ -148,11 +164,21 @@ export function DevolucionesLista() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-slate-900">Devoluciones</h1>
-        {puede(PERMISOS.SOLICITUD_CREAR) && (
-          <button className="btn-primary" onClick={() => setCreando((v) => !v)}>
-            <Plus className="h-4 w-4" /> Nueva
+        <div className="flex items-center gap-2">
+          <button
+            className="btn-outline"
+            onClick={exportar}
+            disabled={exportando || (items?.length ?? 0) === 0}
+            title={filtro ? `Exportar las de "${ESTADO_LABEL[filtro]}" a Excel` : 'Exportar todas a Excel'}
+          >
+            <Download className="h-4 w-4" /> {exportando ? 'Exportando…' : 'Exportar a Excel'}
           </button>
-        )}
+          {puede(PERMISOS.SOLICITUD_CREAR) && (
+            <button className="btn-primary" onClick={() => setCreando((v) => !v)}>
+              <Plus className="h-4 w-4" /> Nueva
+            </button>
+          )}
+        </div>
       </div>
 
       {/* KPIs por estado — clic = filtrar la grilla */}

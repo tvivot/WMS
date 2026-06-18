@@ -2,11 +2,13 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Param,
   ParseIntPipe,
   Patch,
   Post,
   Query,
+  StreamableFile,
 } from '@nestjs/common';
 import { DevEstado } from '@prisma/client';
 import { Actor, RequierePermiso } from '../../core/auth/decoradores';
@@ -47,6 +49,27 @@ export class AutorizacionController {
       estado: est,
       clienteId: clienteId ? Number(clienteId) : undefined,
     });
+  }
+
+  /**
+   * Export a Excel (.xlsx). Ruta literal declarada ANTES de :id para que el
+   * ParseIntPipe de :id no la capture. Sin @RequierePermiso: como en listar, la
+   * propiedad la garantiza el servicio (un cliente solo exporta lo suyo).
+   */
+  @Get('export.xlsx')
+  @Header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  @Header('Content-Disposition', 'attachment; filename="devoluciones.xlsx"')
+  async exportar(
+    @Actor() actor: JwtPayload,
+    @Query('estado') estado?: string,
+    @Query('clienteId') clienteId?: string,
+  ): Promise<StreamableFile> {
+    const est = estado && estado in DevEstado ? (estado as DevEstado) : undefined;
+    const buf = await this.svc.exportarExcel(actor, {
+      estado: est,
+      clienteId: clienteId ? Number(clienteId) : undefined,
+    });
+    return new StreamableFile(buf);
   }
 
   /** Cola de excepciones de consignación pendientes (Gerencia). Antes de :id. */

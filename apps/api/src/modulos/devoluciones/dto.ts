@@ -35,20 +35,28 @@ export class LineaDeclaracionDto {
   cantidad!: number;
 }
 
+/**
+ * Carga del cliente. Es un GUARDADO DE BORRADOR: todo es opcional para que el
+ * cliente pueda ir guardando mientras carga (líneas sin bultos/peso, o al revés).
+ * La validación de "está completo" (líneas + bultos + peso + transportista) vive
+ * en `despachar()`, que es el único gate antes de pasar a En tránsito.
+ */
 export class DeclararDto {
+  @IsOptional()
   @IsArray()
-  @ArrayMinSize(1)
   @ValidateNested({ each: true })
   @Type(() => LineaDeclaracionDto)
-  lineas!: LineaDeclaracionDto[];
+  lineas?: LineaDeclaracionDto[];
 
+  @IsOptional()
   @IsInt()
   @Min(1)
-  bultosDeclarados!: number;
+  bultosDeclarados?: number;
 
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  pesoTotalDeclarado!: number;
+  pesoTotalDeclarado?: number;
 
   @IsOptional()
   @IsInt()

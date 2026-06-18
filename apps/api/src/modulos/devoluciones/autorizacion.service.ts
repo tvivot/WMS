@@ -6,7 +6,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { DevEstado, DevEstadoControl, DevExcepcionEstado } from '@prisma/client';
+import { DevEstado, DevEstadoControl, DevExcepcionEstado, Prisma } from '@prisma/client';
+import { Workbook } from 'exceljs';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditoriaService } from '../../core/auditoria/auditoria.service';
 import { CatalogoService } from '../../core/catalogo/catalogo.service';
@@ -42,6 +43,16 @@ import {
 } from './puertos/consignacion.port';
 
 const PESO_TOLERANCIA = 0.001;
+
+/** Etiquetas legibles de estado para el export (el front usa su propio mapa). */
+const ESTADO_LABEL_EXPORT: Record<DevEstado, string> = {
+  A_APROBAR: 'A aprobar',
+  APROBADO: 'Aprobado',
+  EN_TRANSITO: 'En tránsito',
+  ENTREGADO: 'Entregado',
+  INGRESO_DEPOSITO: 'Ingreso a depósito',
+  PROCESADO: 'Procesado',
+};
 
 @Injectable()
 export class AutorizacionService {
@@ -182,62 +193,72 @@ export class AutorizacionService {
     return this.transicionar(id, actor, a.estado, DevEstado.APROBADO);
   }
 
-  /** Carga del cliente: líneas + bultos + peso + transportista (estado APROBADO). */
+  /**
+   * Guardado de la carga del cliente (estado APROBADO). Es un BORRADOR con
+   * semántica de MERGE: solo toca lo que el caller envía. Omitir un campo lo deja
+   * como estaba (no lo borra) → guardar parcial sin perder lo ya cargado. Para
+   * borrar líneas se manda `lineas: []` explícito. El gate de "completo" (líneas +
+   * bultos + peso + transportista) vive en despachar().
+   */
   async declarar(actor: JwtPayload, id: number, dto: DeclararDto) {
     const a = await this.obtenerOr404(id);
     this.verificarPropiedad(actor, a.clienteId);
     this.exigirEstado(a.estado, DevEstado.APROBADO);
 
-    // Resolver ISBN→producto; rechazar no catalogados (no líneas fantasma).
+    // Las líneas se tocan SOLO si el caller las envió (undefined = no cambiar).
+    const tocaLineas = dto.lineas !== undefined;
     const resueltas: { isbn: string; productoId: number | null; cantidad: number }[] = [];
-    const noCatalogados: string[] = [];
-    // Resolución en bloque (1 query) en vez de un findUnique por línea (N+1).
-    const productos = await this.catalogo.resolverPorIsbnBatch(
-      dto.lineas.map((l) => l.isbn),
-    );
-    for (const linea of dto.lineas) {
-      const norm = normalizarIsbn(linea.isbn);
-      if (!norm) {
-        noCatalogados.push(linea.isbn);
-        continue;
-      }
-      const prod = productos.get(norm);
-      if (!prod) {
-        noCatalogados.push(linea.isbn);
-        continue;
-      }
-      // Mismo ISBN repetido en el payload (p.ej. ISBN-10 y 13 del mismo título): sumar.
-      const ya = resueltas.find((r) => r.isbn === norm);
-      if (ya) ya.cantidad += linea.cantidad;
-      else resueltas.push({ isbn: norm, productoId: prod.id, cantidad: linea.cantidad });
-    }
-    if (noCatalogados.length > 0) {
-      throw new BadRequestException(
-        `ISBN no catalogados (se avisó, no se cargan): ${noCatalogados.join(', ')}`,
+    if (tocaLineas) {
+      // Resolver ISBN→producto; rechazar no catalogados (no líneas fantasma).
+      const noCatalogados: string[] = [];
+      // Resolución en bloque (1 query) en vez de un findUnique por línea (N+1).
+      const productos = await this.catalogo.resolverPorIsbnBatch(
+        dto.lineas!.map((l) => l.isbn),
       );
-    }
+      for (const linea of dto.lineas!) {
+        const norm = normalizarIsbn(linea.isbn);
+        if (!norm) {
+          noCatalogados.push(linea.isbn);
+          continue;
+        }
+        const prod = productos.get(norm);
+        if (!prod) {
+          noCatalogados.push(linea.isbn);
+          continue;
+        }
+        // Mismo ISBN repetido en el payload (p.ej. ISBN-10 y 13 del mismo título): sumar.
+        const ya = resueltas.find((r) => r.isbn === norm);
+        if (ya) ya.cantidad += linea.cantidad;
+        else resueltas.push({ isbn: norm, productoId: prod.id, cantidad: linea.cantidad });
+      }
+      if (noCatalogados.length > 0) {
+        throw new BadRequestException(
+          `ISBN no catalogados (se avisó, no se cargan): ${noCatalogados.join(', ')}`,
+        );
+      }
 
-    // Regla de consignación: el cliente solo puede declarar lo que tiene en
-    // consignación. Un título fuera de la lista, o por encima del saldo, exige
-    // una excepción APROBADA (permiso devolucion.autorizar_excepcion).
-    // Permitido por ISBN = saldo consignación + Σ excepciones aprobadas.
-    const permitido = await this.permitidoPorIsbn(
-      id,
-      a.clienteId,
-      resueltas.map((r) => r.isbn),
-    );
-    const excedidos = resueltas.filter((r) => r.cantidad > (permitido.get(r.isbn) ?? 0));
-    if (excedidos.length > 0) {
-      const detalle = excedidos
-        .map((r) => {
-          const ok = permitido.get(r.isbn) ?? 0;
-          return `${r.isbn} (declarás ${r.cantidad}, en consignación ${ok}, falta autorizar ${r.cantidad - ok})`;
-        })
-        .join('; ');
-      throw new BadRequestException(
-        `Estos libros están fuera de la consignación del cliente o la superan; ` +
-          `requieren autorización de Gerencia: ${detalle}`,
+      // Regla de consignación: el cliente solo puede declarar lo que tiene en
+      // consignación. Un título fuera de la lista, o por encima del saldo, exige
+      // una excepción APROBADA (permiso devolucion.autorizar_excepcion).
+      // Permitido por ISBN = saldo consignación + Σ excepciones aprobadas.
+      const permitido = await this.permitidoPorIsbn(
+        id,
+        a.clienteId,
+        resueltas.map((r) => r.isbn),
       );
+      const excedidos = resueltas.filter((r) => r.cantidad > (permitido.get(r.isbn) ?? 0));
+      if (excedidos.length > 0) {
+        const detalle = excedidos
+          .map((r) => {
+            const ok = permitido.get(r.isbn) ?? 0;
+            return `${r.isbn} (declarás ${r.cantidad}, en consignación ${ok}, falta autorizar ${r.cantidad - ok})`;
+          })
+          .join('; ');
+        throw new BadRequestException(
+          `Estos libros están fuera de la consignación del cliente o la superan; ` +
+            `requieren autorización de Gerencia: ${detalle}`,
+        );
+      }
     }
 
     // El transportista declarado debe existir y estar activo.
@@ -250,25 +271,34 @@ export class AutorizacionService {
       }
     }
 
-    await this.prisma.$transaction([
-      this.prisma.devDeclaracion.deleteMany({ where: { autorizacionId: id } }),
-      this.prisma.devDeclaracion.createMany({
-        data: resueltas.map((r) => ({
-          autorizacionId: id,
-          isbn: r.isbn,
-          productoId: r.productoId,
-          cantidad: r.cantidad,
-        })),
-      }),
-      this.prisma.devAutorizacion.update({
-        where: { id },
-        data: {
-          bultosDeclarados: dto.bultosDeclarados,
-          pesoTotalDeclarado: dto.pesoTotalDeclarado,
-          transportistaId: dto.transportistaId ?? null,
-        },
-      }),
-    ]);
+    // Merge: solo los campos presentes en el DTO. Lo omitido se preserva.
+    const datos: {
+      bultosDeclarados?: number;
+      pesoTotalDeclarado?: number;
+      transportistaId?: number;
+    } = {};
+    if (dto.bultosDeclarados !== undefined) datos.bultosDeclarados = dto.bultosDeclarados;
+    if (dto.pesoTotalDeclarado !== undefined) datos.pesoTotalDeclarado = dto.pesoTotalDeclarado;
+    if (dto.transportistaId !== undefined) datos.transportistaId = dto.transportistaId;
+
+    const ops: Prisma.PrismaPromise<unknown>[] = [];
+    if (tocaLineas) {
+      ops.push(
+        this.prisma.devDeclaracion.deleteMany({ where: { autorizacionId: id } }),
+        this.prisma.devDeclaracion.createMany({
+          data: resueltas.map((r) => ({
+            autorizacionId: id,
+            isbn: r.isbn,
+            productoId: r.productoId,
+            cantidad: r.cantidad,
+          })),
+        }),
+      );
+    }
+    if (Object.keys(datos).length > 0) {
+      ops.push(this.prisma.devAutorizacion.update({ where: { id }, data: datos }));
+    }
+    if (ops.length > 0) await this.prisma.$transaction(ops);
     return this.detalle(id);
   }
 
@@ -870,7 +900,10 @@ export class AutorizacionService {
     );
   }
 
-  async listar(actor: JwtPayload, params: { estado?: DevEstado; clienteId?: number }) {
+  async listar(
+    actor: JwtPayload,
+    params: { estado?: DevEstado; clienteId?: number; take?: number },
+  ) {
     const where: { estado?: DevEstado; clienteId?: number } = {};
     if (params.estado) where.estado = params.estado;
     // Cliente: solo ve lo suyo.
@@ -879,7 +912,9 @@ export class AutorizacionService {
     const items = await this.prisma.devAutorizacion.findMany({
       where,
       orderBy: { id: 'desc' },
-      take: 1000, // guardarraíl: la grilla muestra las más recientes (índices estado/clienteId)
+      // Guardarraíl: la grilla muestra las más recientes (índices estado/clienteId).
+      // El export pide un tope mayor porque no tiene costo de render.
+      take: params.take ?? 1000,
     });
     // Nombre del cliente para la grilla (referencia por ID, sin FK).
     const ids = [...new Set(items.map((i) => i.clienteId))];
@@ -891,6 +926,105 @@ export class AutorizacionService {
       : [];
     const mapa = new Map(clientes.map((c) => [c.id, c]));
     return items.map((i) => ({ ...i, cliente: mapa.get(i.clienteId) ?? null }));
+  }
+
+  /**
+   * Export a Excel (.xlsx) de devoluciones. Reusa `listar` → respeta la propiedad
+   * (un cliente solo exporta lo suyo) y los filtros de la grilla. Dos hojas:
+   * cabecera (una fila por devolución) y detalle (una fila por línea/ISBN).
+   */
+  async exportarExcel(
+    actor: JwtPayload,
+    params: { estado?: DevEstado; clienteId?: number },
+  ): Promise<Buffer> {
+    // Tope alto para el export (un .xlsx no tiene costo de render como la grilla).
+    // Si se alcanza, avisamos en una hoja "Nota" para no ocultar un truncado.
+    const LIMITE_EXPORT = 20000;
+    const items = await this.listar(actor, { ...params, take: LIMITE_EXPORT });
+    const truncado = items.length >= LIMITE_EXPORT;
+    const ids = items.map((i) => i.id);
+
+    // Detalle de líneas + nombres de transportista + títulos de catálogo (batch).
+    const declaraciones = ids.length
+      ? await this.prisma.devDeclaracion.findMany({
+          where: { autorizacionId: { in: ids } },
+          orderBy: [{ autorizacionId: 'asc' }, { isbn: 'asc' }],
+        })
+      : [];
+    const transpIds = [
+      ...new Set(items.map((i) => i.transportistaId).filter((x): x is number => x !== null)),
+    ];
+    const transportistas = transpIds.length
+      ? await this.prisma.transportista.findMany({
+          where: { id: { in: transpIds } },
+          select: { id: true, nombre: true },
+        })
+      : [];
+    const transpMap = new Map(transportistas.map((t) => [t.id, t.nombre]));
+    const info = await this.infoPorProducto(
+      declaraciones.map((d) => d.productoId).filter((x): x is number => x !== null),
+    );
+
+    const wb = new Workbook();
+    wb.creator = 'WMS Grupal';
+
+    const hoja = wb.addWorksheet('Devoluciones');
+    hoja.columns = [
+      { header: '#', key: 'id', width: 8 },
+      { header: 'Estado', key: 'estado', width: 18 },
+      { header: 'Cliente N°', key: 'nroCliente', width: 14 },
+      { header: 'Cliente', key: 'cliente', width: 30 },
+      { header: 'Bultos declarados', key: 'bultos', width: 16 },
+      { header: 'Peso total (kg)', key: 'peso', width: 14 },
+      { header: 'Transportista', key: 'transportista', width: 24 },
+      { header: 'Creada', key: 'creada', width: 18, style: { numFmt: 'dd/mm/yyyy hh:mm' } },
+      { header: 'Actualizada', key: 'actualizada', width: 18, style: { numFmt: 'dd/mm/yyyy hh:mm' } },
+    ];
+    for (const i of items) {
+      hoja.addRow({
+        id: i.id,
+        estado: ESTADO_LABEL_EXPORT[i.estado],
+        nroCliente: i.cliente?.nroCliente ?? '',
+        cliente: i.cliente?.nombre ?? String(i.clienteId),
+        bultos: i.bultosDeclarados ?? '',
+        peso: i.pesoTotalDeclarado !== null ? Number(i.pesoTotalDeclarado) : '',
+        transportista: i.transportistaId !== null ? (transpMap.get(i.transportistaId) ?? '') : '',
+        creada: i.createdAt,
+        actualizada: i.updatedAt,
+      });
+    }
+    hoja.getRow(1).font = { bold: true };
+    hoja.autoFilter = { from: 'A1', to: 'I1' };
+
+    const det = wb.addWorksheet('Detalle por ISBN');
+    det.columns = [
+      { header: 'Devolución #', key: 'autId', width: 12 },
+      { header: 'ISBN', key: 'isbn', width: 18 },
+      { header: 'Título', key: 'titulo', width: 44 },
+      { header: 'Cantidad', key: 'cantidad', width: 10 },
+    ];
+    for (const d of declaraciones) {
+      det.addRow({
+        autId: d.autorizacionId,
+        isbn: d.isbn,
+        titulo: d.productoId !== null ? (info.get(d.productoId)?.titulo ?? '') : '',
+        cantidad: d.cantidad,
+      });
+    }
+    det.getRow(1).font = { bold: true };
+    det.autoFilter = { from: 'A1', to: 'D1' };
+
+    // No ocultar un truncado: si se alcanzó el tope, dejamos constancia visible.
+    if (truncado) {
+      const nota = wb.addWorksheet('Nota');
+      nota.getColumn(1).width = 90;
+      nota.getCell('A1').value =
+        `Se exportaron las ${LIMITE_EXPORT} devoluciones más recientes (tope del export). ` +
+        `Hay más registros: afiná el filtro por estado para acotar el resultado.`;
+      nota.getCell('A1').font = { bold: true, color: { argb: 'FFB45309' } };
+    }
+
+    return Buffer.from(await wb.xlsx.writeBuffer());
   }
 
   async detalle(id: number) {
