@@ -24,6 +24,8 @@ interface Detalle {
   cliente: { id: number; nroCliente: string; nombre: string } | null;
   transportista: { id: number; nombre: string } | null;
   creadoPor: { tipo: 'usuario' | 'cliente'; nombre: string } | null;
+  motivo: { id: number; nombre: string } | null;
+  cantidadUnidades: number | null;
   bultosDeclarados: number | null; pesoTotalDeclarado: string | null; bultosRecibidos: number | null;
   ubicacionEspera: string | null; ubicacionDestinoBueno: string | null; ubicacionDestinoMalo: string | null;
   observaciones: string | null; declaraciones: Linea[]; bultos: Bulto[]; excepciones: Excepcion[];
@@ -158,7 +160,6 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
     })),
   );
   const [bultos, setBultos] = useState(String(d.bultosDeclarados ?? ''));
-  const [peso, setPeso] = useState(String(d.pesoTotalDeclarado ?? ''));
   const [transportistas, setTransportistas] = useState<TransportistaOpcion[]>([]);
   const [transportistaId, setTransportistaId] = useState<string>(
     d.transportistaId ? String(d.transportistaId) : '',
@@ -193,14 +194,13 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
     }
   };
 
-  // Guarda como BORRADOR: manda lo que haya. Bultos/peso vacíos van como undefined
+  // Guarda como BORRADOR: manda lo que haya. Bultos vacíos van como undefined
   // (no se exigen hasta despachar). Lanza si falla: quien la llame decide (el botón
   // muestra el error; "despachar" NO debe seguir si el guardado falló).
   const guardarOLanzar = async () => {
     await api.patch(`/devoluciones/autorizaciones/${d.id}/declaracion`, {
       lineas: lineas.map((l) => ({ isbn: l.isbn, cantidad: l.cantidad })),
       bultosDeclarados: bultos.trim() ? Number(bultos) : undefined,
-      pesoTotalDeclarado: peso.trim() ? Number(peso) : undefined,
       transportistaId: transportistaId ? Number(transportistaId) : undefined,
     });
   };
@@ -222,10 +222,6 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
     }
     if (!bultos.trim() || Number(bultos) < 1) {
       onError('Indicá la cantidad de bultos antes de despachar.');
-      return;
-    }
-    if (!peso.trim()) {
-      onError('Indicá el peso total antes de despachar.');
       return;
     }
     if (!transportistaId) {
@@ -266,9 +262,8 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
         ))}
         {lineas.length === 0 && <p className="text-sm text-slate-400">Escaneá o buscá un ISBN para sumar líneas.</p>}
       </div>
-      <div className="grid grid-cols-2 gap-3 mt-4">
+      <div className="mt-4">
         <Field label="Bultos"><input className="input tabnum" inputMode="numeric" value={bultos} onChange={(e) => { setGuardado(false); setBultos(e.target.value); }} /></Field>
-        <Field label="Peso total (kg)"><input className="input tabnum" inputMode="decimal" value={peso} onChange={(e) => { setGuardado(false); setPeso(e.target.value); }} /></Field>
       </div>
       <div className="mt-3">
         <Field label="Transportista" hint={transportistas.length === 0 ? 'No hay transportistas cargados: pedile al depósito que cargue uno.' : undefined}>
@@ -676,10 +671,13 @@ function ResumenDatos({ d }: { d: Detalle }) {
             </>
           ) : '—'}
         </dd>
+        <dt className="text-slate-400">Motivo</dt>
+        <dd>{d.motivo?.nombre ?? '—'}</dd>
+        <dt className="text-slate-400">Cantidad de unidades</dt>
+        <dd className="tabnum">{d.cantidadUnidades ?? '—'}</dd>
         <dt className="text-slate-400">Transportista</dt>
         <dd>{d.transportista?.nombre ?? '—'}</dd>
         <dt className="text-slate-400">Bultos declarados</dt><dd className="tabnum">{d.bultosDeclarados ?? '—'}</dd>
-        <dt className="text-slate-400">Peso declarado</dt><dd className="tabnum">{d.pesoTotalDeclarado ?? '—'} kg</dd>
         <dt className="text-slate-400">Bultos recibidos</dt><dd className="tabnum">{d.bultosRecibidos ?? '—'}</dd>
         <dt className="text-slate-400">Ubicación espera</dt><dd>{d.ubicacionEspera ?? '—'}</dd>
         {d.observaciones && (<><dt className="text-slate-400">Observaciones</dt><dd>{d.observaciones}</dd></>)}

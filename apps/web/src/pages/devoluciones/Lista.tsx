@@ -18,6 +18,12 @@ interface Autorizacion {
   createdAt: string;
 }
 
+interface Motivo {
+  id: number;
+  nombre: string;
+  requiereObservacion: boolean;
+}
+
 const COLUMNAS: ColumnDef<Autorizacion, unknown>[] = [
   {
     id: 'numero',
@@ -80,12 +86,24 @@ export function DevolucionesLista() {
   const [filtro, setFiltro] = useState<Estado | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [exportando, setExportando] = useState(false);
+  // Datos del formulario de creación.
+  const [motivos, setMotivos] = useState<Motivo[]>([]);
+  const [motivoId, setMotivoId] = useState('');
+  const [cantidad, setCantidad] = useState('');
+  const [observaciones, setObservaciones] = useState('');
 
   const cargar = () => {
     setItems(null);
     api.get<Autorizacion[]>('/devoluciones/autorizaciones').then(setItems).catch(() => setItems([]));
   };
   useEffect(cargar, []);
+  // Motivos para el selector de creación (catálogo del módulo devoluciones).
+  useEffect(() => {
+    api.get<Motivo[]>('/motivos?modulo=devoluciones').then(setMotivos).catch(() => setMotivos([]));
+  }, []);
+
+  const motivoSel = motivos.find((m) => String(m.id) === motivoId) ?? null;
+  const exigeObs = motivoSel?.requiereObservacion ?? false;
 
   const crear = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,11 +112,32 @@ export function DevolucionesLista() {
       setError('Seleccioná un cliente');
       return;
     }
+    if (!motivoId) {
+      setError('Seleccioná un motivo');
+      return;
+    }
+    const cant = Number(cantidad);
+    if (!Number.isInteger(cant) || cant < 1) {
+      setError('Ingresá la cantidad de unidades a devolver (mínimo 1)');
+      return;
+    }
+    if (exigeObs && !observaciones.trim()) {
+      setError('El motivo "Otro" exige cargar una observación');
+      return;
+    }
     try {
-      const body = actor?.tipo === 'cliente' ? {} : { clienteId: cliente!.id };
+      const body = {
+        ...(actor?.tipo === 'cliente' ? {} : { clienteId: cliente!.id }),
+        motivoId: Number(motivoId),
+        cantidadUnidades: cant,
+        observaciones: observaciones.trim() || undefined,
+      };
       await api.post('/devoluciones/autorizaciones', body);
       setCreando(false);
       setCliente(null);
+      setMotivoId('');
+      setCantidad('');
+      setObservaciones('');
       cargar();
     } catch (err) {
       setError((err as Error).message);
@@ -211,6 +250,40 @@ export function DevolucionesLista() {
                 <ClientePicker seleccionado={cliente} onSelect={setCliente} />
               </div>
             )}
+            <div className="w-full sm:w-72">
+              <label className="label">Motivo</label>
+              <select
+                className="input"
+                value={motivoId}
+                onChange={(e) => setMotivoId(e.target.value)}
+              >
+                <option value="">Elegí un motivo…</option>
+                {motivos.map((m) => (
+                  <option key={m.id} value={m.id}>{m.nombre}</option>
+                ))}
+              </select>
+            </div>
+            <div className="w-full sm:w-44">
+              <label className="label">Cantidad de unidades</label>
+              <input
+                className="input tabnum"
+                inputMode="numeric"
+                value={cantidad}
+                onChange={(e) => setCantidad(e.target.value)}
+                placeholder="Libros a devolver"
+              />
+            </div>
+            <div className="w-full">
+              <label className="label">
+                Observación {exigeObs ? '(obligatoria)' : '(opcional)'}
+              </label>
+              <input
+                className="input"
+                value={observaciones}
+                onChange={(e) => setObservaciones(e.target.value)}
+                placeholder={exigeObs ? 'Detallá el motivo "Otro"' : 'Opcional'}
+              />
+            </div>
             <button className="btn-accent" type="submit">
               Crear solicitud
             </button>

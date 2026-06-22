@@ -44,6 +44,12 @@ function crearFakePrisma() {
       { id: 11, nroCliente: 'C-11', nombre: 'Otro Cliente', activo: true, depositoId: null },
     ] as Fila[],
     depositos: [{ id: 1, nombre: 'Depósito Principal' }] as Fila[],
+    motivos: [
+      { id: 1, modulo: 'devoluciones', nombre: 'Otro', requiereObservacion: true, activo: true },
+      { id: 2, modulo: 'devoluciones', nombre: 'Solicitado por la editorial', requiereObservacion: false, activo: true },
+      { id: 3, modulo: 'devoluciones', nombre: 'Solicitado por el cliente', requiereObservacion: false, activo: true },
+      { id: 4, modulo: 'devoluciones', nombre: 'Traspaso Virtual', requiereObservacion: false, activo: true },
+    ] as Fila[],
     transportistas: [
       { id: 5, nombre: 'Trans OK', activo: true },
       { id: 6, nombre: 'Trans Baja', activo: false },
@@ -223,6 +229,23 @@ function crearFakePrisma() {
     deposito: {
       findFirst: async () => (db.depositos[0] ? { ...db.depositos[0] } : null),
     },
+    motivo: {
+      findFirst: async ({ where }: any) =>
+        db.motivos.find(
+          (m: any) =>
+            m.id === where.id &&
+            (where.modulo === undefined || m.modulo === where.modulo) &&
+            (where.activo === undefined || m.activo === where.activo),
+        ) ?? null,
+      findUnique: async ({ where }: any) => {
+        const m = db.motivos.find((x) => x.id === where.id);
+        return m ? { id: m.id, nombre: m.nombre } : null;
+      },
+      findMany: async ({ where }: any) =>
+        db.motivos
+          .filter((m) => (where?.id?.in ? where.id.in.includes(m.id) : true))
+          .map((m) => ({ id: m.id, nombre: m.nombre })),
+    },
     usuario: {
       findUnique: async ({ where }: any) => {
         const u = [vendedor, deposito, admin].find((x) => x.sub === where.id);
@@ -313,7 +336,7 @@ function crearServicio() {
 /** Lleva una autorización nueva hasta el estado pedido (camino feliz). */
 async function avanzarHasta(ctx: ReturnType<typeof crearServicio>, hasta: DevEstado) {
   const { svc } = ctx;
-  const a = await svc.crear(vendedor, { clienteId: 10 });
+  const a = await svc.crear(vendedor, { clienteId: 10, motivoId: 2, cantidadUnidades: 5 });
   if (hasta === DevEstado.A_APROBAR) return a.id;
   await svc.aprobar(vendedor, a.id);
   if (hasta === DevEstado.APROBADO) return a.id;
@@ -359,6 +382,39 @@ async function avanzarHasta(ctx: ReturnType<typeof crearServicio>, hasta: DevEst
   });
   return a.id;
 }
+
+describe('AutorizacionService — creación: motivo + cantidad de unidades', () => {
+  it('crea con motivo y cantidad, persistiéndolos', async () => {
+    const ctx = crearServicio();
+    const a = await ctx.svc.crear(vendedor, { clienteId: 10, motivoId: 2, cantidadUnidades: 7 });
+    const det = await ctx.svc.detalle(a.id);
+    expect(det.motivo).toEqual({ id: 2, nombre: 'Solicitado por la editorial' });
+    expect(det.cantidadUnidades).toBe(7);
+  });
+
+  it('rechaza un motivo inexistente o de otro módulo', async () => {
+    const ctx = crearServicio();
+    await expect(
+      ctx.svc.crear(vendedor, { clienteId: 10, motivoId: 999, cantidadUnidades: 1 }),
+    ).rejects.toThrow(/Motivo inexistente/);
+  });
+
+  it('"Otro" exige observación: la rechaza si falta y la acepta si está', async () => {
+    const ctx = crearServicio();
+    await expect(
+      ctx.svc.crear(vendedor, { clienteId: 10, motivoId: 1, cantidadUnidades: 1 }),
+    ).rejects.toThrow(/exige cargar una observación/);
+    const a = await ctx.svc.crear(vendedor, {
+      clienteId: 10,
+      motivoId: 1,
+      cantidadUnidades: 1,
+      observaciones: 'Devolución especial',
+    });
+    const det = await ctx.svc.detalle(a.id);
+    expect(det.motivo?.id).toBe(1);
+    expect(det.observaciones).toBe('Devolución especial');
+  });
+});
 
 describe('AutorizacionService — borrador (guardar parcial) y despacho', () => {
   it('guarda un borrador con solo líneas (sin bultos/peso/transportista)', async () => {
@@ -668,7 +724,7 @@ describe('AutorizacionService — propiedad del cliente', () => {
   it('en el listado, un cliente solo ve lo suyo', async () => {
     const ctx = crearServicio();
     await avanzarHasta(ctx, DevEstado.APROBADO); // cliente 10
-    await ctx.svc.crear(vendedor, { clienteId: 11 });
+    await ctx.svc.crear(vendedor, { clienteId: 11, motivoId: 2, cantidadUnidades: 3 });
     const deCliente = await ctx.svc.listar(clienteX, {});
     expect(deCliente).toHaveLength(1);
     expect(deCliente.every((a) => a.clienteId === 10)).toBe(true);
@@ -841,7 +897,7 @@ describe('AutorizacionService — regla de consignación al declarar + excepcion
   // Nota: el permiso devolucion.autorizar_excepcion se valida en el controller
   // (@RequierePermiso), no en el servicio; acá se prueba la lógica.
   async function aprobada(ctx: ReturnType<typeof crearServicio>) {
-    const a = await ctx.svc.crear(vendedor, { clienteId: 10 });
+    const a = await ctx.svc.crear(vendedor, { clienteId: 10, motivoId: 2, cantidadUnidades: 5 });
     await ctx.svc.aprobar(vendedor, a.id);
     return a.id;
   }

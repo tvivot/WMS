@@ -34,6 +34,23 @@ model Pais {
   @@map("core_pais")
 }
 
+/// Catálogo transversal de motivos (la razón de una operación), discriminado por
+/// `modulo` para que cada módulo tenga su propio juego. Hoy lo usa Devoluciones
+/// (motivo obligatorio al crear). `requiereObservacion` marca el motivo que exige
+/// cargar una observación (caso "Otro"). Los módulos lo referencian por ID.
+model Motivo {
+  id                  Int      @id @default(autoincrement())
+  modulo              String   @db.VarChar(40)
+  nombre              String   @db.VarChar(120)
+  requiereObservacion Boolean  @default(false) @map("requiere_observacion")
+  activo              Boolean  @default(true)
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@index([modulo, activo])
+  @@map("core_motivo")
+}
+
 model Deposito {
   id        Int      @id @default(autoincrement())
   nombre    String   @db.VarChar(150)
@@ -233,6 +250,14 @@ model DevAutorizacion {
   creadoPorId   Int          @map("creado_por_id")
   creadoPorTipo DevActorTipo @map("creado_por_tipo")
   transportistaId Int?    @map("transportista_id")
+
+  // Motivo de la devolución (obligatorio al crear; ver core_motivo). Nullable en
+  // DB por las filas históricas previas a esta función; el servicio lo exige al
+  // crear. Referencia al catálogo transversal por ID, sin FK cruzada.
+  motivoId         Int? @map("motivo_id")
+  // Cantidad de unidades (libros) a devolver, declarada al crear. Obligatoria en
+  // el servicio; nullable en DB por las filas históricas.
+  cantidadUnidades Int? @map("cantidad_unidades")
 
   // Declarado por el cliente
   bultosDeclarados   Int?     @map("bultos_declarados")

@@ -21,6 +21,17 @@ export class CrearAutorizacionDto {
   @IsInt()
   depositoId?: number;
 
+  /** Motivo de la devolución (obligatorio). Debe existir en core_motivo para el
+   *  módulo devoluciones. Si el motivo es de los que exigen observación ("Otro"),
+   *  `observaciones` pasa a ser obligatoria (lo valida el servicio). */
+  @IsInt()
+  motivoId!: number;
+
+  /** Cantidad de unidades (libros) a devolver, declarada al crear. Obligatoria. */
+  @IsInt()
+  @Min(1)
+  cantidadUnidades!: number;
+
   @IsOptional()
   @IsString()
   observaciones?: string;

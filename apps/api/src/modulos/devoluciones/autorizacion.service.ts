@@ -159,6 +159,19 @@ export class AutorizacionService {
       depositoId = dto.depositoId ?? cli.depositoId ?? (await this.depositoPorDefecto());
     }
 
+    // Motivo obligatorio: debe existir y estar activo para el módulo devoluciones.
+    const motivo = await this.prisma.motivo.findFirst({
+      where: { id: dto.motivoId, modulo: 'devoluciones', activo: true },
+    });
+    if (!motivo) throw new BadRequestException('Motivo inexistente o inactivo');
+    // "Otro" (requiereObservacion) exige una observación cargada.
+    const observaciones = dto.observaciones?.trim() || null;
+    if (motivo.requiereObservacion && !observaciones) {
+      throw new BadRequestException(
+        `El motivo "${motivo.nombre}" exige cargar una observación`,
+      );
+    }
+
     const creada = await this.prisma.devAutorizacion.create({
       data: {
         estado: DevEstado.A_APROBAR,
@@ -166,7 +179,9 @@ export class AutorizacionService {
         depositoId,
         creadoPorId: actor.sub,
         creadoPorTipo: actor.tipo,
-        observaciones: dto.observaciones ?? null,
+        motivoId: motivo.id,
+        cantidadUnidades: dto.cantidadUnidades,
+        observaciones,
       },
     });
     await this.auditoria.registrar({
@@ -476,14 +491,9 @@ export class AutorizacionService {
     this.verificarPropiedad(actor, a.clienteId);
     this.exigirEstado(a.estado, DevEstado.APROBADO);
     const lineas = await this.prisma.devDeclaracion.count({ where: { autorizacionId: id } });
-    if (
-      lineas === 0 ||
-      !a.bultosDeclarados ||
-      a.pesoTotalDeclarado === null ||
-      a.transportistaId === null
-    ) {
+    if (lineas === 0 || !a.bultosDeclarados || a.transportistaId === null) {
       throw new BadRequestException(
-        'Faltan datos para despachar: líneas, bultos, peso total y transportista',
+        'Faltan datos para despachar: líneas, bultos y transportista',
       );
     }
     return this.transicionar(id, actor, a.estado, DevEstado.EN_TRANSITO);
@@ -961,6 +971,17 @@ export class AutorizacionService {
         })
       : [];
     const transpMap = new Map(transportistas.map((t) => [t.id, t.nombre]));
+    // Nombres de motivo (batch) para la cabecera del export.
+    const motivoIds = [
+      ...new Set(items.map((i) => i.motivoId).filter((x): x is number => x !== null)),
+    ];
+    const motivos = motivoIds.length
+      ? await this.prisma.motivo.findMany({
+          where: { id: { in: motivoIds } },
+          select: { id: true, nombre: true },
+        })
+      : [];
+    const motivoMap = new Map(motivos.map((m) => [m.id, m.nombre]));
     const info = await this.infoPorProducto(
       declaraciones.map((d) => d.productoId).filter((x): x is number => x !== null),
     );
@@ -974,6 +995,8 @@ export class AutorizacionService {
       { header: 'Estado', key: 'estado', width: 18 },
       { header: 'Cliente N°', key: 'nroCliente', width: 14 },
       { header: 'Cliente', key: 'cliente', width: 30 },
+      { header: 'Motivo', key: 'motivo', width: 26 },
+      { header: 'Unidades declaradas', key: 'cantidadUnidades', width: 18 },
       { header: 'Bultos declarados', key: 'bultos', width: 16 },
       { header: 'Peso total (kg)', key: 'peso', width: 14 },
       { header: 'Transportista', key: 'transportista', width: 24 },
@@ -986,6 +1009,8 @@ export class AutorizacionService {
         estado: ESTADO_LABEL_EXPORT[i.estado],
         nroCliente: i.cliente?.nroCliente ?? '',
         cliente: i.cliente?.nombre ?? String(i.clienteId),
+        motivo: i.motivoId !== null ? (motivoMap.get(i.motivoId) ?? '') : '',
+        cantidadUnidades: i.cantidadUnidades ?? '',
         bultos: i.bultosDeclarados ?? '',
         peso: i.pesoTotalDeclarado !== null ? Number(i.pesoTotalDeclarado) : '',
         transportista: i.transportistaId !== null ? (transpMap.get(i.transportistaId) ?? '') : '',
@@ -994,7 +1019,7 @@ export class AutorizacionService {
       });
     }
     hoja.getRow(1).font = { bold: true };
-    hoja.autoFilter = { from: 'A1', to: 'I1' };
+    hoja.autoFilter = { from: 'A1', to: 'K1' };
 
     const det = wb.addWorksheet('Detalle por ISBN');
     det.columns = [
@@ -1046,7 +1071,7 @@ export class AutorizacionService {
       ),
       ...a.excepciones.map((e) => e.productoId).filter((x): x is number => x !== null),
     ]);
-    const [cliente, transportista, creadoPor] = await Promise.all([
+    const [cliente, transportista, creadoPor, motivo] = await Promise.all([
       this.prisma.cliente.findUnique({
         where: { id: a.clienteId },
         select: { id: true, nroCliente: true, nombre: true },
@@ -1072,6 +1097,12 @@ export class AutorizacionService {
               select: { nombre: true, username: true },
             })
             .then((u) => (u ? { tipo: 'usuario' as const, nombre: u.nombre } : null)),
+      a.motivoId
+        ? this.prisma.motivo.findUnique({
+            where: { id: a.motivoId },
+            select: { id: true, nombre: true },
+          })
+        : Promise.resolve(null),
     ]);
 
     const conTitulo = <T extends { productoId: number | null }>(x: T) => {
@@ -1088,6 +1119,7 @@ export class AutorizacionService {
       cliente,
       transportista,
       creadoPor,
+      motivo,
       declaraciones: a.declaraciones.map(conTitulo),
       bultos: a.bultos.map((b) => ({ ...b, controles: b.controles.map(conTitulo) })),
       excepciones: a.excepciones.map(conTitulo),
