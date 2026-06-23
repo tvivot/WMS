@@ -10,6 +10,13 @@
     "packages/*",
     "apps/*"
   ],
+  "overrides": {
+    "multer": "^2.2.0",
+    "uuid": "^11.1.1",
+    "@nestjs/swagger": {
+      "js-yaml": "^4.2.0"
+    }
+  },
   "scripts": {
     "build:shared": "npm run build -w @wms/shared",
     "build:web": "npm run build -w @wms/web",
