@@ -6,7 +6,7 @@ import { ClienteImportDto, CrearClienteDto, EditarClienteDto } from './dto';
 import { enBloques, escaparLike } from '../util/bloques';
 
 const PUBLICO = {
-  id: true, nroCliente: true, nombre: true, direccion: true, activo: true,
+  id: true, nroCliente: true, nombre: true, direccion: true, email: true, activo: true,
   primerIngreso: true, paisId: true, depositoId: true, createdAt: true,
 } as const;
 
@@ -90,6 +90,7 @@ export class ClientesService {
         nroCliente: dto.nroCliente,
         nombre: dto.nombre,
         direccion: dto.direccion ?? null,
+        email: dto.email?.trim() || null,
         claveHash: await this.password.hash(clave),
         paisId: dto.paisId ?? null,
         depositoId: dto.depositoId ?? null,
@@ -169,7 +170,12 @@ export class ClientesService {
 
   async editar(id: number, dto: EditarClienteDto) {
     await this.obtener(id);
-    return this.prisma.cliente.update({ where: { id }, data: dto, select: PUBLICO });
+    // Normaliza email vacío a null (consistente con crear()): '' no es "tiene email".
+    const data = {
+      ...dto,
+      ...(dto.email !== undefined ? { email: dto.email.trim() || null } : {}),
+    };
+    return this.prisma.cliente.update({ where: { id }, data, select: PUBLICO });
   }
 
   async obtener(id: number) {

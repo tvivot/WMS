@@ -35,6 +35,12 @@ export class CrearClienteDto {
   @MaxLength(300)
   direccion?: string;
 
+  /** Correo(s) de contacto; admite varios separados por coma (notificaciones). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  email?: string;
+
   @IsOptional()
   @IsInt()
   paisId?: number;
@@ -54,6 +60,12 @@ export class EditarClienteDto {
   @IsString()
   @MaxLength(300)
   direccion?: string;
+
+  /** Correo(s) de contacto; admite varios separados por coma (notificaciones). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  email?: string;
 
   @IsOptional()
   @IsInt()

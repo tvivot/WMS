@@ -15,6 +15,7 @@ export const PERMISOS = {
   CATALOGO_ADMINISTRAR: 'catalogo.administrar',
   TRANSPORTISTA_ADMINISTRAR: 'transportista.administrar',
   MOTIVO_ADMINISTRAR: 'motivo.administrar',
+  NOTIFICACIONES_ADMINISTRAR: 'notificaciones.administrar',
   DEVOLUCION_CORREGIR: 'devolucion.corregir',
   DEVOLUCION_STOCK_VER: 'devolucion.stock.ver',
   CONSIGNACION_IMPORTAR: 'consignacion.importar',
@@ -36,6 +37,8 @@ export const PERMISOS_DESCRIPCION: Record<string, string> = {
   [PERMISOS.CATALOGO_ADMINISTRAR]: 'Administrar catálogo de productos',
   [PERMISOS.TRANSPORTISTA_ADMINISTRAR]: 'Administrar transportistas',
   [PERMISOS.MOTIVO_ADMINISTRAR]: 'Administrar motivos de devolución',
+  [PERMISOS.NOTIFICACIONES_ADMINISTRAR]:
+    'Administrar notificaciones por email (grupos y reglas por estado)',
   [PERMISOS.DEVOLUCION_CORREGIR]:
     'Corregir devoluciones ya procesadas (queda en auditoría)',
   [PERMISOS.DEVOLUCION_STOCK_VER]:

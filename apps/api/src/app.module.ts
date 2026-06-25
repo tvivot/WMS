@@ -18,6 +18,7 @@ import { UsuariosModule } from './core/usuarios/usuarios.module';
 import { RolesModule } from './core/roles/roles.module';
 import { TransportistasModule } from './core/transportistas/transportistas.module';
 import { MotivosModule } from './core/motivos/motivos.module';
+import { NotificacionesModule } from './core/notificaciones/notificaciones.module';
 import { AdminModule } from './core/admin/admin.module';
 import { DevolucionesModule } from './modulos/devoluciones/devoluciones.module';
 import { IntegracionesModule } from './integraciones/integraciones.module';
@@ -40,6 +41,7 @@ import { IntegracionesModule } from './integraciones/integraciones.module';
     RolesModule,
     TransportistasModule,
     MotivosModule,
+    NotificacionesModule,
     AdminModule,
     DevolucionesModule,
     IntegracionesModule,

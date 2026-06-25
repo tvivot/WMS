@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Readable } from 'node:stream';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { DevEstado, DevEstadoControl, DevExcepcionEstado, Prisma } from '@prisma/client';
 import { Workbook } from 'exceljs';
@@ -43,6 +44,76 @@ import {
 } from './puertos/consignacion.port';
 
 const PESO_TOLERANCIA = 0.001;
+
+/** Tope de filas de datos que se procesan en una importación (anti-DoS). */
+const IMPORT_MAX_FILAS = 5000;
+
+/** Archivo que inyecta multer (forma mínima, sin depender de tipos ambient). */
+export interface ArchivoImportado {
+  buffer: Buffer;
+  size: number;
+  mimetype: string;
+  originalname: string;
+}
+
+/** Una columna detectada en el archivo (índice 1-based + encabezado + ejemplo). */
+export interface ColumnaArchivo {
+  indice: number;
+  encabezado: string;
+  ejemplo: string | null;
+}
+
+export interface LineaImportada {
+  isbn: string;
+  cantidad: number;
+  productoId: number | null;
+  titulo: string | null;
+  editorial: string | null;
+  imagenUrl: string | null;
+}
+
+export interface ErrorImportacion {
+  fila: number;
+  isbn: string | null;
+  cantidad: string | null;
+  motivo: string;
+}
+
+export interface PreviewImportacion {
+  columnas: ColumnaArchivo[];
+  mapeo: { isbnCol: number | null; cantidadCol: number | null; tieneEncabezado: boolean };
+  // null mientras no haya un mapeo resuelto (el cliente todavía debe elegir columnas).
+  resultado: {
+    lineas: LineaImportada[];
+    errores: ErrorImportacion[];
+    filasLeidas: number;
+    totalUnidades: number;
+    truncado: boolean;
+  } | null;
+}
+
+/**
+ * Extrae el texto de una celda de exceljs cubriendo los tipos que trae
+ * (string, número, fecha, fórmula, hyperlink, rich text). Los números se pasan
+ * por `String` para NO perder dígitos del EAN-13 (un ISBN cargado como número).
+ */
+function celdaTexto(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'object') {
+    const o = value as Record<string, unknown>;
+    if (typeof o.text === 'string') return o.text.trim(); // hyperlink {text,hyperlink}
+    if (Array.isArray(o.richText)) {
+      return o.richText.map((r) => (r as { text?: string }).text ?? '').join('').trim();
+    }
+    if ('result' in o) return celdaTexto(o.result); // fórmula → su resultado
+    return '';
+  }
+  return String(value).trim();
+}
 
 /** Etiquetas legibles de estado para el export (el front usa su propio mapa). */
 const ESTADO_LABEL_EXPORT: Record<DevEstado, string> = {
@@ -122,6 +193,7 @@ export class AutorizacionService {
     });
     const ev: DevolucionEstadoCambiadoEvent = {
       autorizacionId: id,
+      clienteId: actualizada.clienteId,
       estadoAnterior,
       estadoNuevo,
       actorId: actor.sub,
@@ -315,6 +387,167 @@ export class AutorizacionService {
     }
     if (ops.length > 0) await this.prisma.$transaction(ops);
     return this.detalle(id);
+  }
+
+  /**
+   * Previsualiza una importación de líneas desde un Excel/CSV (cliente que procesó
+   * la devolución en otro sistema). NO PERSISTE NADA: parsea el archivo, resuelve
+   * ISBN→producto y devuelve qué libros/cantidades se importarían y qué filas
+   * fallaron, para que el cliente lo revise y lo acepte antes de cargarlo en la
+   * declaración (la persistencia sigue pasando por declarar() → mismo gate y misma
+   * validación de consignación). Solo en estado APROBADO y sobre la propia
+   * devolución (un cliente no importa en la de otro).
+   *
+   * Si no se indica el mapeo de columnas, devuelve solo el listado de columnas
+   * (con auto-detección por encabezado) para que el cliente elija ISBN y cantidad.
+   */
+  async previsualizarImportacion(
+    actor: JwtPayload,
+    id: number,
+    archivo: ArchivoImportado,
+    opts: { isbnCol?: number; cantidadCol?: number; tieneEncabezado?: boolean },
+  ): Promise<PreviewImportacion> {
+    const a = await this.obtenerOr404(id);
+    this.verificarPropiedad(actor, a.clienteId);
+    this.exigirEstado(a.estado, DevEstado.APROBADO);
+
+    const ws = await this.leerHoja(archivo);
+    const tieneEncabezado = opts.tieneEncabezado ?? true;
+
+    // Columnas: encabezado (si lo hay) + un valor de ejemplo de la primera fila de datos.
+    const totalCols = Math.max(ws.columnCount, ws.getRow(1).cellCount);
+    const filaDatos = tieneEncabezado ? 2 : 1;
+    const columnas: ColumnaArchivo[] = [];
+    for (let c = 1; c <= totalCols; c++) {
+      const encabezado = tieneEncabezado
+        ? celdaTexto(ws.getRow(1).getCell(c).value) || `Columna ${c}`
+        : `Columna ${c}`;
+      const ejemplo = celdaTexto(ws.getRow(filaDatos).getCell(c).value) || null;
+      columnas.push({ indice: c, encabezado, ejemplo });
+    }
+
+    // Mapeo: lo pedido por el cliente o, si falta, auto-detección por encabezado.
+    let isbnCol = opts.isbnCol ?? null;
+    let cantidadCol = opts.cantidadCol ?? null;
+    if (tieneEncabezado) {
+      if (isbnCol === null) {
+        isbnCol =
+          columnas.find((col) => /isbn|ean|c[oó]digo/i.test(col.encabezado))?.indice ?? null;
+      }
+      if (cantidadCol === null) {
+        // La cantidad nunca puede caer en la misma columna que el ISBN.
+        cantidadCol =
+          columnas.find(
+            (col) => /cant|unidad|qty|stock/i.test(col.encabezado) && col.indice !== isbnCol,
+          )?.indice ?? null;
+      }
+    }
+
+    const mapeo = { isbnCol, cantidadCol, tieneEncabezado };
+    // Sin mapeo resoluble: que el cliente elija las columnas en el front.
+    if (isbnCol === null || cantidadCol === null) {
+      return { columnas, mapeo, resultado: null };
+    }
+    // La misma columna para ISBN y cantidad daría líneas con el ISBN como cantidad.
+    if (isbnCol === cantidadCol) {
+      throw new BadRequestException('La columna de ISBN y la de cantidad no pueden ser la misma');
+    }
+
+    // Recorrido de filas de datos: junta candidatos y filas con error.
+    const ultimaFila = ws.rowCount;
+    const topeFila = Math.min(ultimaFila, filaDatos + IMPORT_MAX_FILAS - 1);
+    const truncado = ultimaFila > topeFila;
+    const candidatos: { fila: number; isbn: string; cantidad: number }[] = [];
+    const errores: ErrorImportacion[] = [];
+    let filasLeidas = 0;
+
+    for (let r = filaDatos; r <= topeFila; r++) {
+      const fila = ws.getRow(r);
+      const isbnRaw = celdaTexto(fila.getCell(isbnCol).value);
+      const cantRaw = celdaTexto(fila.getCell(cantidadCol).value);
+      if (!isbnRaw && !cantRaw) continue; // fila vacía: se ignora
+      filasLeidas++;
+
+      const norm = normalizarIsbn(isbnRaw);
+      if (!norm) {
+        errores.push({ fila: r, isbn: isbnRaw || null, cantidad: cantRaw || null, motivo: 'ISBN inválido' });
+        continue;
+      }
+      // Estricto: solo dígitos. Evita que separadores de miles/decimales se
+      // malinterpreten en silencio (p.ej. "1.000" → 1 con Number()).
+      if (!/^\d+$/.test(cantRaw)) {
+        errores.push({ fila: r, isbn: norm, cantidad: cantRaw || null, motivo: 'Cantidad inválida (debe ser un entero ≥ 1, sin separadores)' });
+        continue;
+      }
+      const cantidad = Number(cantRaw);
+      if (cantidad < 1) {
+        errores.push({ fila: r, isbn: norm, cantidad: cantRaw || null, motivo: 'Cantidad inválida (debe ser ≥ 1)' });
+        continue;
+      }
+      candidatos.push({ fila: r, isbn: norm, cantidad });
+    }
+
+    // Resolución de catálogo en bloque (sin N+1); no catalogado → fila con error.
+    const productos = await this.catalogo.resolverPorIsbnBatch(candidatos.map((c) => c.isbn));
+    const lineas = new Map<string, LineaImportada>();
+    for (const cand of candidatos) {
+      const prod = productos.get(cand.isbn);
+      if (!prod) {
+        errores.push({ fila: cand.fila, isbn: cand.isbn, cantidad: String(cand.cantidad), motivo: 'ISBN no catalogado' });
+        continue;
+      }
+      const ya = lineas.get(cand.isbn);
+      if (ya) ya.cantidad += cand.cantidad;
+      else
+        lineas.set(cand.isbn, {
+          isbn: cand.isbn,
+          cantidad: cand.cantidad,
+          productoId: prod.id,
+          titulo: prod.titulo,
+          editorial: prod.editorial,
+          imagenUrl: prod.imagenUrl,
+        });
+    }
+
+    const lineasArr = [...lineas.values()];
+    const totalUnidades = lineasArr.reduce((acc, l) => acc + l.cantidad, 0);
+    // Errores ordenados por fila para que el cliente los ubique en su archivo.
+    errores.sort((x, y) => x.fila - y.fila);
+
+    return {
+      columnas,
+      mapeo,
+      resultado: { lineas: lineasArr, errores, filasLeidas, totalUnidades, truncado },
+    };
+  }
+
+  /** Carga la primera hoja del archivo (xlsx o csv). Valida que sea legible. */
+  private async leerHoja(archivo: ArchivoImportado) {
+    const esCsv =
+      /\.csv$/i.test(archivo.originalname) ||
+      archivo.mimetype === 'text/csv' ||
+      archivo.mimetype === 'application/csv';
+    const wb = new Workbook();
+    try {
+      if (esCsv) {
+        return await wb.csv.read(Readable.from(archivo.buffer));
+      }
+      // exceljs tipa el parámetro como `Buffer extends ArrayBuffer`: pasamos el
+      // ArrayBuffer subyacente (lo acepta en runtime) y evitamos la fricción de
+      // tipos con el Buffer de Node.
+      const ab = archivo.buffer.buffer.slice(
+        archivo.buffer.byteOffset,
+        archivo.buffer.byteOffset + archivo.buffer.byteLength,
+      ) as ArrayBuffer;
+      await wb.xlsx.load(ab);
+    } catch {
+      throw new BadRequestException('No se pudo leer el archivo: ¿es un Excel (.xlsx) o CSV válido?');
+    }
+    const ws = wb.worksheets[0];
+    if (!ws || ws.rowCount === 0) {
+      throw new BadRequestException('El archivo no tiene datos');
+    }
+    return ws;
   }
 
   /**

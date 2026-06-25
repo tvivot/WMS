@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Workbook } from 'exceljs';
 import { DevEstado } from '@prisma/client';
 import type { JwtPayload } from '../../core/auth/jwt-payload';
 import { AutorizacionService } from './autorizacion.service';
@@ -1009,5 +1010,175 @@ describe('AutorizacionService — regla de consignación al declarar + excepcion
     expect(pend).toHaveLength(1);
     expect(pend[0]).toMatchObject({ autorizacionId: id, isbn: ISBN_B, titulo: 'Libro B' });
     expect(pend[0].cliente).toMatchObject({ nroCliente: 'C-10' });
+  });
+});
+
+describe('AutorizacionService — importación de líneas desde Excel/CSV', () => {
+  async function xlsx(filas: (string | number)[][]): Promise<Buffer> {
+    const wb = new Workbook();
+    const ws = wb.addWorksheet('Hoja1');
+    for (const f of filas) ws.addRow(f);
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+  const archivo = (
+    buffer: Buffer,
+    originalname = 'dev.xlsx',
+    mimetype = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ) => ({ buffer, size: buffer.length, mimetype, originalname });
+
+  it('auto-detecta las columnas ISBN/Cantidad por encabezado y resuelve los títulos', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    const buf = await xlsx([
+      ['ISBN', 'Cantidad'],
+      [ISBN_A, 2],
+      [ISBN_B, 3],
+    ]);
+    const prev = await ctx.svc.previsualizarImportacion(clienteX, id, archivo(buf), {});
+    expect(prev.mapeo).toMatchObject({ isbnCol: 1, cantidadCol: 2, tieneEncabezado: true });
+    expect(prev.resultado).not.toBeNull();
+    expect(prev.resultado!.lineas).toEqual([
+      expect.objectContaining({ isbn: ISBN_A, cantidad: 2, titulo: 'Libro A' }),
+      expect.objectContaining({ isbn: ISBN_B, cantidad: 3, titulo: 'Libro B' }),
+    ]);
+    expect(prev.resultado!.totalUnidades).toBe(5);
+    expect(prev.resultado!.errores).toHaveLength(0);
+  });
+
+  it('respeta el mapeo de columnas explícito (ISBN y cantidad en otras posiciones)', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    const buf = await xlsx([
+      ['Cant', 'Cod', 'Nota'],
+      [4, ISBN_C, 'x'],
+    ]);
+    const prev = await ctx.svc.previsualizarImportacion(clienteX, id, archivo(buf), {
+      isbnCol: 2,
+      cantidadCol: 1,
+    });
+    expect(prev.resultado!.lineas).toEqual([
+      expect.objectContaining({ isbn: ISBN_C, cantidad: 4, titulo: 'Libro C' }),
+    ]);
+  });
+
+  it('suma cantidades del mismo ISBN repetido en varias filas', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    const buf = await xlsx([
+      ['ISBN', 'Cantidad'],
+      [ISBN_A, 2],
+      [ISBN_A, 3],
+    ]);
+    const prev = await ctx.svc.previsualizarImportacion(clienteX, id, archivo(buf), {});
+    expect(prev.resultado!.lineas).toEqual([
+      expect.objectContaining({ isbn: ISBN_A, cantidad: 5 }),
+    ]);
+  });
+
+  it('reporta filas con error: ISBN inválido, cantidad inválida y no catalogado', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    const buf = await xlsx([
+      ['ISBN', 'Cantidad'],
+      ['no-es-isbn', 1], // ISBN inválido
+      [ISBN_A, 0], // cantidad < 1
+      [ISBN_NO_CATALOGADO, 2], // válido pero fuera del catálogo
+      [ISBN_B, 1], // OK
+    ]);
+    const prev = await ctx.svc.previsualizarImportacion(clienteX, id, archivo(buf), {});
+    expect(prev.resultado!.lineas).toEqual([
+      expect.objectContaining({ isbn: ISBN_B, cantidad: 1 }),
+    ]);
+    const motivos = prev.resultado!.errores.map((e) => e.motivo);
+    expect(motivos).toEqual([
+      expect.stringContaining('ISBN inválido'),
+      expect.stringContaining('Cantidad inválida'),
+      expect.stringContaining('no catalogado'),
+    ]);
+  });
+
+  it('sin encabezado reconocible y sin mapeo: devuelve las columnas y resultado null', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    const buf = await xlsx([
+      ['col1', 'col2'],
+      [ISBN_A, 2],
+    ]);
+    const prev = await ctx.svc.previsualizarImportacion(clienteX, id, archivo(buf), {});
+    expect(prev.resultado).toBeNull();
+    expect(prev.columnas).toHaveLength(2);
+  });
+
+  it('lee CSV además de xlsx', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    const csv = Buffer.from(`ISBN,Cantidad\n${ISBN_A},2\n${ISBN_C},1\n`, 'utf8');
+    const prev = await ctx.svc.previsualizarImportacion(
+      clienteX,
+      id,
+      archivo(csv, 'dev.csv', 'text/csv'),
+      {},
+    );
+    expect(prev.resultado!.lineas).toEqual([
+      expect.objectContaining({ isbn: ISBN_A, cantidad: 2 }),
+      expect.objectContaining({ isbn: ISBN_C, cantidad: 1 }),
+    ]);
+  });
+
+  it('un cliente no puede importar en la devolución de otro (propiedad)', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    const buf = await xlsx([
+      ['ISBN', 'Cantidad'],
+      [ISBN_A, 1],
+    ]);
+    await expect(
+      ctx.svc.previsualizarImportacion(clienteAjeno, id, archivo(buf), {}),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('rechaza importar fuera del estado APROBADO (no despachada todavía)', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.EN_TRANSITO);
+    const buf = await xlsx([
+      ['ISBN', 'Cantidad'],
+      [ISBN_A, 1],
+    ]);
+    await expect(
+      ctx.svc.previsualizarImportacion(clienteX, id, archivo(buf), {}),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('rechaza usar la misma columna para ISBN y cantidad', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    const buf = await xlsx([
+      ['ISBN', 'Cantidad'],
+      [ISBN_A, 2],
+    ]);
+    await expect(
+      ctx.svc.previsualizarImportacion(clienteX, id, archivo(buf), { isbnCol: 1, cantidadCol: 1 }),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('marca como inválida una cantidad con separador de miles (no la malinterpreta)', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    const buf = await xlsx([
+      ['ISBN', 'Cantidad'],
+      [ISBN_A, '1.000'],
+    ]);
+    const prev = await ctx.svc.previsualizarImportacion(clienteX, id, archivo(buf), {});
+    expect(prev.resultado!.lineas).toHaveLength(0);
+    expect(prev.resultado!.errores[0].motivo).toContain('Cantidad inválida');
+  });
+
+  it('rechaza un archivo ilegible', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    const basura = archivo(Buffer.from('no soy un xlsx'), 'dev.xlsx');
+    await expect(
+      ctx.svc.previsualizarImportacion(clienteX, id, basura, {}),
+    ).rejects.toThrow(BadRequestException);
   });
 });

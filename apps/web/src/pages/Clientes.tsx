@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, KeyRound, Plus, Search, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, KeyRound, Pencil, Plus, Search, X } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { api } from '../lib/api';
 import { Card, ClaveDialog, CredencialAlert, EmptyState, Field, Spinner } from '../components/ui';
@@ -10,6 +10,7 @@ interface Cliente {
   nroCliente: string;
   nombre: string;
   direccion: string | null;
+  email: string | null;
   activo: boolean;
   primerIngreso: boolean;
 }
@@ -22,7 +23,9 @@ export function Clientes() {
   const [q, setQ] = useState('');
   const [page, setPage] = useState(0);
   const [creando, setCreando] = useState(false);
-  const [form, setForm] = useState({ nroCliente: '', nombre: '', direccion: '', clave: '' });
+  const [form, setForm] = useState({ nroCliente: '', nombre: '', direccion: '', email: '', clave: '' });
+  const [editando, setEditando] = useState<Cliente | null>(null);
+  const [editForm, setEditForm] = useState({ nombre: '', direccion: '', email: '' });
   const [cred, setCred] = useState<{ titulo: string; clave: string } | null>(null);
   const [reseteando, setReseteando] = useState<Cliente | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -70,11 +73,35 @@ export function Clientes() {
         nroCliente: form.nroCliente,
         nombre: form.nombre,
         direccion: form.direccion || undefined,
+        email: form.email.trim() || undefined,
         clave: form.clave.trim() || undefined,
       });
       setCred({ titulo: `Cliente ${r.nroCliente} — clave de acceso`, clave: r.claveGenerada });
-      setForm({ nroCliente: '', nombre: '', direccion: '', clave: '' });
+      setForm({ nroCliente: '', nombre: '', direccion: '', email: '', clave: '' });
       setCreando(false);
+      void cargar(q, page);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const abrirEdicion = (c: Cliente) => {
+    setCreando(false);
+    setEditForm({ nombre: c.nombre, direccion: c.direccion ?? '', email: c.email ?? '' });
+    setEditando(c);
+  };
+
+  const guardarEdicion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editando) return;
+    setError(null);
+    try {
+      await api.put(`/clientes/${editando.id}`, {
+        nombre: editForm.nombre,
+        direccion: editForm.direccion || undefined,
+        email: editForm.email.trim(),
+      });
+      setEditando(null);
       void cargar(q, page);
     } catch (err) {
       setError((err as Error).message);
@@ -114,6 +141,12 @@ export function Clientes() {
         cell: ({ row }) => <span className="text-slate-500">{row.original.direccion ?? '—'}</span>,
       },
       {
+        id: 'email',
+        header: 'Email',
+        accessorFn: (c) => c.email ?? '',
+        cell: ({ row }) => <span className="text-slate-500">{row.original.email || '—'}</span>,
+      },
+      {
         id: 'estado',
         header: 'Estado',
         accessorFn: (c) => (c.activo ? 'Activo' : 'Inactivo'),
@@ -141,7 +174,10 @@ export function Clientes() {
         header: '',
         enableSorting: false,
         cell: ({ row }) => (
-          <div className="text-right">
+          <div className="flex items-center justify-end gap-1">
+            <button className="btn-ghost h-9" onClick={() => abrirEdicion(row.original)} title="Editar datos / email">
+              <Pencil className="h-4 w-4" /> Editar
+            </button>
             <button className="btn-ghost h-9" onClick={() => setReseteando(row.original)} title="Asignar nueva clave">
               <KeyRound className="h-4 w-4" /> Clave
             </button>
@@ -206,10 +242,35 @@ export function Clientes() {
             <Field label="Dirección">
               <input className="input w-72" value={form.direccion} onChange={(e) => setForm({ ...form, direccion: e.target.value })} />
             </Field>
+            <Field label="Email" hint="Para notificaciones; varios separados por coma.">
+              <input className="input w-72" type="text" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="contacto@cliente.com" />
+            </Field>
             <Field label="Clave (opcional)" hint="Vacío = se genera automática. Si la escribís, queda definitiva (mín. 8).">
               <input className="input w-64" value={form.clave} minLength={8} onChange={(e) => setForm({ ...form, clave: e.target.value })} placeholder="Generar automática" />
             </Field>
             <button className="btn-accent" type="submit">Crear</button>
+            {error && <p className="text-sm text-red-600 w-full">{error}</p>}
+          </form>
+        </Card>
+      )}
+
+      {editando && (
+        <Card>
+          <form onSubmit={guardarEdicion} className="flex flex-wrap items-end gap-3">
+            <div className="w-full text-sm font-semibold text-slate-700">
+              Editar cliente {editando.nroCliente} · {editando.nombre}
+            </div>
+            <Field label="Nombre">
+              <input className="input w-64" value={editForm.nombre} onChange={(e) => setEditForm({ ...editForm, nombre: e.target.value })} required />
+            </Field>
+            <Field label="Dirección">
+              <input className="input w-72" value={editForm.direccion} onChange={(e) => setEditForm({ ...editForm, direccion: e.target.value })} />
+            </Field>
+            <Field label="Email" hint="Para notificaciones; varios separados por coma.">
+              <input className="input w-72" type="text" value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} placeholder="contacto@cliente.com" />
+            </Field>
+            <button className="btn-accent" type="submit">Guardar</button>
+            <button className="btn-ghost" type="button" onClick={() => setEditando(null)}>Cancelar</button>
             {error && <p className="text-sm text-red-600 w-full">{error}</p>}
           </form>
         </Card>

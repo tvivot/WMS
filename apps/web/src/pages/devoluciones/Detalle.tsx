@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, CheckCircle2, PencilLine, Truck } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, CheckCircle2, FileSpreadsheet, PencilLine, Trash2, Truck, Upload, X } from 'lucide-react';
 import { api } from '../../lib/api';
 import { enviarControl } from '../../lib/outbox';
 import { useAuth } from '../../lib/auth';
@@ -165,10 +165,27 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
     d.transportistaId ? String(d.transportistaId) : '',
   );
   const [guardado, setGuardado] = useState(false);
+  const [importando, setImportando] = useState(false);
 
   useEffect(() => {
     api.get<TransportistaOpcion[]>('/transportistas').then(setTransportistas).catch(() => setTransportistas([]));
   }, []);
+
+  // Importación desde Excel/CSV: suma las líneas importadas a las ya cargadas
+  // (autosuma por ISBN, igual que el escaneo). El cliente las ve y puede
+  // editarlas/quitarlas antes de guardar → siempre controla lo que envía.
+  const importar = (imp: LineaDecl[]) => {
+    setGuardado(false);
+    setLineas((prev) => {
+      const map = new Map(prev.map((l) => [l.isbn, { ...l }]));
+      for (const l of imp) {
+        const ya = map.get(l.isbn);
+        if (ya) ya.cantidad += l.cantidad;
+        else map.set(l.isbn, { ...l });
+      }
+      return [...map.values()];
+    });
+  };
 
   // Suma una unidad del producto (autosuma si el ISBN ya está en la lista).
   const sumar = (p: ProductoLite) => {
@@ -182,6 +199,14 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
       }
       return [...prev, { isbn: p.isbn, titulo: p.titulo, editorial: p.editorial, imagenUrl: p.imagenUrl, cantidad: 1 }];
     });
+  };
+
+  // Quita un libro de la declaración. Permitido mientras la devolución no se
+  // despachó (este panel solo se muestra en estado APROBADO). Al guardar,
+  // declarar() reemplaza las líneas → la quitada se elimina en el backend.
+  const quitar = (isbn: string) => {
+    setGuardado(false);
+    setLineas((prev) => prev.filter((l) => l.isbn !== isbn));
   };
 
   // Escaneo/wedge: resuelve el código por ISBN y suma (trae título + portada).
@@ -245,6 +270,22 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
         despaches. Al <b>despachar</b> la cerrás (pasa a <i>En tránsito</i>) y ya no se modifica.
       </p>
       <Scanner onScan={agregar} onElegir={sumar} />
+
+      <div className="mt-3">
+        {!importando ? (
+          <button type="button" className="btn-outline !py-1.5 text-sm" onClick={() => setImportando(true)}>
+            <FileSpreadsheet className="h-4 w-4" /> Importar desde Excel/CSV
+          </button>
+        ) : (
+          <ImportarExcel
+            autorizacionId={d.id}
+            onImportar={importar}
+            onError={onError}
+            onClose={() => setImportando(false)}
+          />
+        )}
+      </div>
+
       <div className="mt-4 space-y-2">
         {lineas.map((l, i) => (
           <div key={l.isbn} className="flex items-center gap-3 text-sm">
@@ -258,6 +299,15 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
               onChange={(e) => { setGuardado(false); setLineas((p) => p.map((x, j) => (j === i ? { ...x, cantidad: Number(e.target.value) } : x))); }}
               className="input w-20 h-9 tabnum text-center"
             />
+            <button
+              type="button"
+              onClick={() => quitar(l.isbn)}
+              aria-label={`Quitar ${l.titulo}`}
+              title="Quitar libro"
+              className="shrink-0 p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
           </div>
         ))}
         {lineas.length === 0 && <p className="text-sm text-slate-400">Escaneá o buscá un ISBN para sumar líneas.</p>}
@@ -287,6 +337,195 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
         )}
       </div>
     </Card>
+  );
+}
+
+interface ColumnaArchivo { indice: number; encabezado: string; ejemplo: string | null }
+interface LineaImportada { isbn: string; cantidad: number; productoId: number | null; titulo: string | null; editorial: string | null; imagenUrl: string | null }
+interface ErrorImportacion { fila: number; isbn: string | null; cantidad: string | null; motivo: string }
+interface PreviewImportacion {
+  columnas: ColumnaArchivo[];
+  mapeo: { isbnCol: number | null; cantidadCol: number | null; tieneEncabezado: boolean };
+  resultado: { lineas: LineaImportada[]; errores: ErrorImportacion[]; filasLeidas: number; totalUnidades: number; truncado: boolean } | null;
+}
+
+/**
+ * Importación de líneas desde un Excel/CSV (cliente que procesó la devolución en
+ * otro sistema). Flujo: subir archivo → elegir columna de ISBN y de cantidad
+ * (con auto-detección) → revisar qué libros/cantidades se importan → aceptar.
+ * El backend NO persiste: solo previsualiza. Al aceptar, las líneas se cargan en
+ * la declaración editable y recién se confirman al guardar/despachar.
+ */
+function ImportarExcel({ autorizacionId, onImportar, onError, onClose }: {
+  autorizacionId: number;
+  onImportar: (lineas: LineaDecl[]) => void;
+  onError: (s: string) => void;
+  onClose: () => void;
+}) {
+  const [archivo, setArchivo] = useState<File | null>(null);
+  const [columnas, setColumnas] = useState<ColumnaArchivo[]>([]);
+  const [isbnCol, setIsbnCol] = useState('');
+  const [cantidadCol, setCantidadCol] = useState('');
+  const [tieneEncabezado, setTieneEncabezado] = useState(true);
+  const [resultado, setResultado] = useState<PreviewImportacion['resultado']>(null);
+  const [busy, setBusy] = useState(false);
+
+  const llamar = async (
+    file: File,
+    opts: { encabezado: boolean; isbnCol?: string; cantidadCol?: string },
+  ) => {
+    const form = new FormData();
+    form.append('archivo', file);
+    form.append('tieneEncabezado', String(opts.encabezado));
+    if (opts.isbnCol) form.append('isbnCol', opts.isbnCol);
+    if (opts.cantidadCol) form.append('cantidadCol', opts.cantidadCol);
+    setBusy(true);
+    onError('');
+    try {
+      const r = await api.upload<PreviewImportacion>(
+        `/devoluciones/autorizaciones/${autorizacionId}/declaracion/importar`,
+        form,
+      );
+      setColumnas(r.columnas);
+      if (r.mapeo.isbnCol) setIsbnCol(String(r.mapeo.isbnCol));
+      if (r.mapeo.cantidadCol) setCantidadCol(String(r.mapeo.cantidadCol));
+      setResultado(r.resultado);
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onFile = (f: File | null) => {
+    setArchivo(f);
+    setResultado(null); setColumnas([]); setIsbnCol(''); setCantidadCol('');
+    if (f) llamar(f, { encabezado: tieneEncabezado });
+  };
+
+  const cambiarEncabezado = (v: boolean) => {
+    setTieneEncabezado(v);
+    // Conserva el mapeo ya elegido al cambiar si la primera fila es encabezado.
+    if (archivo) llamar(archivo, { encabezado: v, isbnCol: isbnCol || undefined, cantidadCol: cantidadCol || undefined });
+  };
+
+  const previsualizar = () => {
+    if (archivo && isbnCol && cantidadCol) {
+      llamar(archivo, { encabezado: tieneEncabezado, isbnCol, cantidadCol });
+    }
+  };
+
+  const aceptar = () => {
+    if (!resultado || resultado.lineas.length === 0) return;
+    onImportar(
+      resultado.lineas.map((l) => ({
+        isbn: l.isbn, titulo: l.titulo ?? l.isbn, editorial: l.editorial, imagenUrl: l.imagenUrl, cantidad: l.cantidad,
+      })),
+    );
+    onClose();
+  };
+
+  const opcionCol = (c: ColumnaArchivo) =>
+    `${c.encabezado}${c.ejemplo ? ` (ej: ${c.ejemplo.slice(0, 24)})` : ''}`;
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 animate-fade-in">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold flex items-center gap-2"><FileSpreadsheet className="h-4 w-4 text-brand-green-ink" /> Importar desde Excel/CSV</h3>
+        <button type="button" className="text-slate-400 hover:text-slate-700" onClick={onClose} aria-label="Cerrar importación"><X className="h-4 w-4" /></button>
+      </div>
+      <p className="text-xs text-slate-500 mb-3">
+        Subí el archivo (.xlsx o .csv) que exportaste de tu sistema y elegí en qué columna está el
+        ISBN y en cuál la cantidad. Vas a poder revisar qué se importa antes de aceptarlo.
+      </p>
+
+      <label className="inline-flex items-center gap-2 cursor-pointer btn-outline !py-1.5 text-sm">
+        <Upload className="h-4 w-4" /> {archivo ? 'Cambiar archivo' : 'Elegir archivo'}
+        <input
+          type="file" accept=".xlsx,.csv" className="hidden"
+          onChange={(e) => onFile(e.target.files?.[0] ?? null)}
+        />
+      </label>
+      {archivo && <span className="ml-2 text-xs text-slate-500">{archivo.name}</span>}
+
+      {busy && <p className="text-xs text-slate-400 mt-3 inline-flex items-center gap-2"><Spinner className="text-slate-400" /> Procesando archivo…</p>}
+
+      {columnas.length > 0 && (
+        <div className="mt-4 space-y-3">
+          <label className="flex items-center gap-2 text-sm text-slate-600">
+            <input type="checkbox" checked={tieneEncabezado} onChange={(e) => cambiarEncabezado(e.target.checked)} />
+            La primera fila es un encabezado (títulos de columna)
+          </label>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <Field label="Columna del ISBN">
+              <select className="input" value={isbnCol} onChange={(e) => setIsbnCol(e.target.value)}>
+                <option value="">Elegir…</option>
+                {columnas.map((c) => <option key={c.indice} value={c.indice}>{opcionCol(c)}</option>)}
+              </select>
+            </Field>
+            <Field label="Columna de la cantidad">
+              <select className="input" value={cantidadCol} onChange={(e) => setCantidadCol(e.target.value)}>
+                <option value="">Elegir…</option>
+                {columnas.map((c) => <option key={c.indice} value={c.indice}>{opcionCol(c)}</option>)}
+              </select>
+            </Field>
+          </div>
+          <button type="button" className="btn-outline !py-1.5 text-sm" disabled={busy || !isbnCol || !cantidadCol} onClick={previsualizar}>
+            Previsualizar importación
+          </button>
+        </div>
+      )}
+
+      {resultado && (
+        <div className="mt-4 border-t border-slate-200 pt-4">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm mb-3">
+            <span className="font-semibold text-slate-700">{resultado.lineas.length} título(s) · {resultado.totalUnidades} unidad(es)</span>
+            {resultado.errores.length > 0 && (
+              <span className="inline-flex items-center gap-1 text-amber-700"><AlertTriangle className="h-4 w-4" /> {resultado.errores.length} fila(s) con problema</span>
+            )}
+          </div>
+
+          {resultado.lineas.length > 0 ? (
+            <div className="max-h-64 overflow-y-auto rounded-lg border border-slate-200 bg-white divide-y divide-slate-100">
+              {resultado.lineas.map((l) => (
+                <div key={l.isbn} className="flex items-center gap-3 px-3 py-2 text-sm">
+                  <ProductoThumb producto={{ isbn: l.isbn, titulo: l.titulo ?? l.isbn, editorial: l.editorial, imagenUrl: l.imagenUrl }} size={32} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{l.titulo ?? l.isbn}</span>
+                    <span className="block truncate text-xs text-slate-400 tabnum">{l.isbn}</span>
+                  </span>
+                  <span className="tabnum font-medium">{l.cantidad}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-slate-400">No se reconoció ningún libro con ese mapeo de columnas.</p>
+          )}
+
+          {resultado.errores.length > 0 && (
+            <details className="mt-3 text-xs">
+              <summary className="cursor-pointer text-amber-700 font-medium">Ver {resultado.errores.length} fila(s) con problema</summary>
+              <div className="mt-2 max-h-40 overflow-y-auto rounded border border-amber-200 bg-amber-50 divide-y divide-amber-100">
+                {resultado.errores.map((er, i) => (
+                  <div key={`${er.fila}-${i}`} className="px-2 py-1 flex justify-between gap-2">
+                    <span className="text-slate-600">Fila {er.fila}{er.isbn ? ` · ${er.isbn}` : ''}</span>
+                    <span className="text-amber-700">{er.motivo}</span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+
+          {resultado.truncado && (
+            <p className="mt-2 text-xs text-amber-700">Se procesaron las primeras 5000 filas del archivo (tope). Dividí el archivo si hay más.</p>
+          )}
+
+          <button type="button" className="btn-accent mt-4 disabled:opacity-50" disabled={resultado.lineas.length === 0} onClick={aceptar}>
+            <CheckCircle2 className="h-4 w-4" /> Aceptar importación
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

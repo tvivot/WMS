@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
@@ -72,6 +72,33 @@ export class DeclararDto {
   @IsOptional()
   @IsInt()
   transportistaId?: number;
+}
+
+/**
+ * Importación de líneas desde un Excel/CSV que el cliente procesó en otro sistema.
+ * Acompaña al archivo (multipart): por eso los campos llegan como strings y se
+ * convierten con class-transformer. Las columnas son 1-based (Columna 1 = la
+ * primera). Si no se envían `isbnCol`/`cantidadCol`, el servicio devuelve solo el
+ * listado de columnas (con auto-detección) para que el cliente elija el mapeo.
+ */
+export class ImportarDeclaracionDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  isbnCol?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  cantidadCol?: number;
+
+  /** ¿La primera fila es encabezado? Por defecto sí. */
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true' || value === '1')
+  @IsBoolean()
+  tieneEncabezado?: boolean;
 }
 
 export class RecibirDto {

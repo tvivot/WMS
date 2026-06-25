@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -9,23 +10,30 @@ import {
   Post,
   Query,
   StreamableFile,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { DevEstado } from '@prisma/client';
 import { Actor, RequierePermiso } from '../../core/auth/decoradores';
 import { PERMISOS } from '../../core/auth/permisos';
 import type { JwtPayload } from '../../core/auth/jwt-payload';
-import { AutorizacionService } from './autorizacion.service';
+import { AutorizacionService, type ArchivoImportado } from './autorizacion.service';
 import {
   CerrarDto,
   ControlarBultoDto,
   CorregirControlDto,
   CrearAutorizacionDto,
   DeclararDto,
+  ImportarDeclaracionDto,
   IngresoDto,
   RecibirDto,
   ResolverExcepcionDto,
   SolicitarExcepcionDto,
 } from './dto';
+
+/** Tope de tamaño del archivo de importación de devoluciones (5 MB). */
+const IMPORT_MAX_BYTES = 5 * 1024 * 1024;
 
 @Controller('devoluciones/autorizaciones')
 export class AutorizacionController {
@@ -104,6 +112,29 @@ export class AutorizacionController {
     @Body() dto: DeclararDto,
   ) {
     return this.svc.declarar(actor, id, dto);
+  }
+
+  /**
+   * Previsualiza una importación de líneas desde Excel/CSV (cliente que procesó la
+   * devolución en otro sistema). Multipart, campo `archivo`. No persiste: devuelve
+   * columnas + qué se importaría para que el cliente lo revise y lo acepte; la carga
+   * real sigue pasando por /declaracion (mismo gate y validación de consignación).
+   */
+  @RequierePermiso(PERMISOS.SOLICITUD_CREAR)
+  @Post(':id/declaracion/importar')
+  @UseInterceptors(FileInterceptor('archivo', { limits: { fileSize: IMPORT_MAX_BYTES } }))
+  importar(
+    @Actor() actor: JwtPayload,
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() archivo: ArchivoImportado | undefined,
+    @Body() dto: ImportarDeclaracionDto,
+  ) {
+    if (!archivo) throw new BadRequestException('Falta el archivo a importar (campo "archivo")');
+    const nombre = archivo.originalname ?? '';
+    if (!/\.(xlsx|csv)$/i.test(nombre)) {
+      throw new BadRequestException('Formato no soportado: subí un Excel (.xlsx) o CSV (.csv)');
+    }
+    return this.svc.previsualizarImportacion(actor, id, archivo, dto);
   }
 
   @RequierePermiso(PERMISOS.SOLICITUD_CREAR)

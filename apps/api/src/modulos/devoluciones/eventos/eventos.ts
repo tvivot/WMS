@@ -9,6 +9,8 @@ export const DEVOLUCION_PROCESADA = 'devolucion.procesada';
 
 export interface DevolucionEstadoCambiadoEvent {
   autorizacionId: number;
+  /** Cliente dueño de la devolución. Lo consume Notificaciones (mail al cliente). */
+  clienteId: number;
   estadoAnterior: string;
   estadoNuevo: string;
   actorId: number;

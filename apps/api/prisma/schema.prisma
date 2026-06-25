@@ -128,6 +128,9 @@ model Cliente {
   nroCliente       String    @unique @map("nro_cliente") @db.VarChar(40)
   nombre           String    @db.VarChar(200)
   direccion        String?   @db.VarChar(300)
+  // Correo(s) de contacto del cliente. Admite varios separados por coma.
+  // Lo usan las notificaciones por email cuando una regla marca "incluir cliente".
+  email            String?   @db.VarChar(255)
   claveHash        String    @map("clave_hash") @db.VarChar(255)
   primerIngreso    Boolean   @default(true) @map("primer_ingreso")
   activo           Boolean   @default(true)
@@ -205,6 +208,102 @@ model Auditoria {
 
   @@index([entidad, entidadId])
   @@map("core_auditoria")
+}
+
+// ---------------------------------------------------------------------------
+//  NOTIFICACIONES (core) — emails por cambio de estado. Transversal (`modulo`):
+//  hoy lo usa Devoluciones, pero el motor sirve a futuros módulos sin tocar nada.
+//  Se engancha por EVENTO de dominio (devolucion.estado_cambiado): no acopla a
+//  internos de Devoluciones. Referencias a entidades de otros módulos por ID
+//  suelto (entidad_id), sin FK cruzada.
+// ---------------------------------------------------------------------------
+
+/// Grupo reutilizable de destinatarios. `emails` = lista separada por coma,
+/// punto y coma o salto de línea; se parsea y deduplica al enviar.
+model GrupoCorreo {
+  id        Int      @id @default(autoincrement())
+  nombre    String   @unique @db.VarChar(120)
+  emails    String   @db.Text
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  reglas NotificacionReglaGrupo[]
+
+  @@map("core_grupo_correo")
+}
+
+/// Regla de notificación por estado destino. Una por (modulo, estado). Dispara
+/// hacia varios grupos y/o usuarios internos, y opcionalmente al cliente de la
+/// entidad (incluirCliente). asunto/cuerpo son plantillas con placeholders
+/// ({{nro}}, {{cliente}}, {{estado}}, {{estadoAnterior}}, {{fecha}}).
+model NotificacionRegla {
+  id             Int      @id @default(autoincrement())
+  modulo         String   @default("devoluciones") @db.VarChar(40)
+  estado         String   @db.VarChar(60)
+  incluirCliente Boolean  @default(false) @map("incluir_cliente")
+  asunto         String   @db.VarChar(255)
+  cuerpo         String   @db.Text
+  activo         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  grupos   NotificacionReglaGrupo[]
+  usuarios NotificacionReglaUsuario[]
+
+  @@unique([modulo, estado])
+  @@map("core_notificacion_regla")
+}
+
+/// Destinos "grupo" de una regla (N:N regla↔grupo).
+model NotificacionReglaGrupo {
+  reglaId Int @map("regla_id")
+  grupoId Int @map("grupo_id")
+
+  regla NotificacionRegla @relation(fields: [reglaId], references: [id], onDelete: Cascade)
+  grupo GrupoCorreo       @relation(fields: [grupoId], references: [id], onDelete: Cascade)
+
+  @@id([reglaId, grupoId])
+  @@index([grupoId])
+  @@map("core_notificacion_regla_grupo")
+}
+
+/// Destinos "usuario interno" de una regla. usuarioId es referencia suelta a
+/// core_usuario (sin FK ni back-relation, para no tocar el modelo Usuario): el
+/// email se resuelve en código al enviar, filtrando usuarios inexistentes.
+model NotificacionReglaUsuario {
+  reglaId   Int @map("regla_id")
+  usuarioId Int @map("usuario_id")
+
+  regla NotificacionRegla @relation(fields: [reglaId], references: [id], onDelete: Cascade)
+
+  @@id([reglaId, usuarioId])
+  @@index([usuarioId])
+  @@map("core_notificacion_regla_usuario")
+}
+
+/// Log / outbox de envíos. estadoEnvio: PENDIENTE | ENVIADO | ERROR. El cron de
+/// reintento reprocesa PENDIENTE/ERROR con intentos < tope. entidadId guarda el
+/// ID de la entidad del módulo (p.ej. la autorización) sin FK cruzada.
+model NotificacionLog {
+  id            Int       @id @default(autoincrement())
+  reglaId       Int?      @map("regla_id")
+  modulo        String    @db.VarChar(40)
+  entidadId     Int       @map("entidad_id")
+  estado        String    @db.VarChar(60)
+  destinatarios String    @db.Text
+  asunto        String    @db.VarChar(255)
+  cuerpo        String    @db.Text
+  estadoEnvio   String    @default("PENDIENTE") @map("estado_envio") @db.VarChar(20)
+  error         String?   @db.Text
+  intentos      Int       @default(0)
+  sentAt        DateTime? @map("sent_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([estadoEnvio])
+  @@index([modulo, entidadId])
+  @@map("core_notificacion_log")
 }
 
 /// Esqueleto: health check. Se mantiene; el endpoint /api/health usa SELECT 1.

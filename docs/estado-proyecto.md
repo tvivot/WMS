@@ -87,6 +87,19 @@ El dominio devuelve **503 de LiteSpeed** (el proceso Node no corre); build OK en
 ## Criterio de validación (pasó completo)
 Vendedor crea → aprueba → cliente declara 3 ISBN/2 bultos/10kg → despacha → depósito recibe 2 bultos (6+4=10) → ingresa `DEV-01` → controla bulto por bulto (1 mal estado) → Procesado con reconciliación por ISBN correcta + auditoría completa + evento emitido. Test del seam: adapter falso de Ubicaciones sin tocar Devoluciones ✅.
 
+## Notificaciones por email (core, transversal) — 2026-06-25
+
+Módulo `core/notificaciones`: envía mails en cada **cambio de estado** de una devolución, con destinatarios **configurables por estado**.
+
+- **Cómo se engancha:** suscriptor (`@OnEvent('devolucion.estado_cambiado')`) del evento de dominio que ya emite Devoluciones. **No toca Devoluciones** salvo enriquecer el evento con `clienteId` (contrato en `docs/contratos/eventos.md`). Respeta el límite de módulo: se suscribe por nombre de evento, no importa internos.
+- **Config (ABM en `/notificaciones`, permiso `notificaciones.administrar`):**
+  - **Grupos de correo** (`core_grupo_correo`): nombre + lista de emails (coma/;/salto).
+  - **Reglas por estado** (`core_notificacion_regla`, una por `modulo+estado`): apunta a **varios grupos y/o usuarios internos** (N:N) + flag **incluir cliente** + plantilla **asunto/cuerpo** editable con placeholders `{{nro}} {{cliente}} {{estado}} {{estadoAnterior}} {{fecha}}`. Las 6 reglas vienen precargadas **desactivadas**.
+- **Cliente:** se agregó `core_cliente.email` (varios separados por coma), editable en el ABM de clientes.
+- **Office365:** envío por **Microsoft Graph** (app-only, client credentials), **sin dependencias npm** (fetch nativo + token cacheado, reintenta 1 vez ante 401). Env vars: `O365_TENANT_ID/O365_CLIENT_ID/O365_CLIENT_SECRET/MAIL_FROM`. Si faltan → envío deshabilitado, la UI lo avisa, los avisos quedan en cola. **Requiere registrar app en Azure AD con permiso de aplicación `Mail.Send` + consentimiento de admin.**
+- **Outbox/reintento:** `core_notificacion_log` registra cada envío (PENDIENTE/ENVIADO/ERROR, cuerpo renderizado). Cron cada 5 min reintenta ERROR/PENDIENTE con `intentos<5`, con **guarda anti-solape** y **ventana de 2 min** (no pisa el envío inline en vuelo → evita duplicados).
+- **Migración:** `20260625120000_core_notificaciones`. **Pendiente de deploy** (corre con `prisma migrate deploy`).
+
 ## Próximos pasos (roadmap CLAUDE.md)
 1. **Ubicaciones** (`ubi_*`): al conectarlo, cambiar UNA línea en `devoluciones.module.ts` (`provide: UBICACION_RESOLVER`).
 2. **Integraciones** (`int_*`) antes del primer sync externo.
