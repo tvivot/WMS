@@ -7,7 +7,13 @@ import { PrismaService } from '../../../prisma/prisma.service';
  * todavía NO se procesó (cierre). Procesado sale del stock de devoluciones:
  * a partir de ahí el alta de stock real la maneja Inventario vía evento.
  */
-const ESTADOS_STOCK = [DevEstado.ENTREGADO, DevEstado.INGRESO_DEPOSITO];
+const ESTADOS_STOCK = [
+  DevEstado.ENTREGADO,
+  DevEstado.EN_PROCESO_DEVOLUCION,
+  DevEstado.PROCESANDO,
+  DevEstado.VALIDANDO,
+  DevEstado.CON_DIFERENCIAS,
+];
 
 type ProductoInfo = {
   titulo: string;

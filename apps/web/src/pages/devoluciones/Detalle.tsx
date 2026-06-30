@@ -4,7 +4,7 @@ import { AlertTriangle, ArrowLeft, CheckCircle2, FileSpreadsheet, PencilLine, Tr
 import { api } from '../../lib/api';
 import { enviarControl } from '../../lib/outbox';
 import { useAuth } from '../../lib/auth';
-import { PERMISOS, ESTADOS_ORDEN, ESTADO_LABEL, type Estado } from '../../lib/estados';
+import { PERMISOS, ESTADOS_LINEA, ESTADO_LABEL, type Estado } from '../../lib/estados';
 import { Card, EstadoBadge, Field, ProductoThumb, Spinner } from '../../components/ui';
 import { Scanner } from '../../components/Scanner';
 import type { ProductoLite } from '../../lib/producto';
@@ -115,15 +115,23 @@ export function DevolucionDetalle() {
       )}
 
       {d.estado === 'ENTREGADO' && puede(PERMISOS.DEPOSITO_INGRESAR) && (
-        <PanelIngreso onAccion={accion} id={d.id} />
+        <PanelIniciar onAccion={accion} id={d.id} />
       )}
 
-      {(d.estado === 'EN_TRANSITO' || d.estado === 'ENTREGADO' || d.estado === 'INGRESO_DEPOSITO') && puede(PERMISOS.DEPOSITO_INGRESAR) && (
+      {d.estado === 'EN_PROCESO_DEVOLUCION' && puede(PERMISOS.DEPOSITO_CONTROLAR) && (
+        <PanelControl d={d} onDone={cargar} onError={setError} />
+      )}
+
+      {d.estado === 'PROCESANDO' && puede(PERMISOS.DEPOSITO_CONTROLAR) && (
         <PanelLote d={d} onDone={cargar} onError={setError} />
       )}
 
-      {d.estado === 'INGRESO_DEPOSITO' && puede(PERMISOS.DEPOSITO_CONTROLAR) && (
-        <PanelControl d={d} onDone={cargar} onError={setError} />
+      {d.estado === 'VALIDANDO' && (
+        <PanelValidando d={d} onDone={cargar} onError={setError} />
+      )}
+
+      {d.estado === 'CON_DIFERENCIAS' && (
+        <PanelConDiferencias d={d} onDone={cargar} onError={setError} />
       )}
 
       {d.estado === 'PROCESADO' && <PanelReconciliacion id={d.id} d={d} />}
@@ -138,16 +146,18 @@ export function DevolucionDetalle() {
 }
 
 function Stepper({ estado }: { estado: Estado }) {
-  const idx = ESTADOS_ORDEN.indexOf(estado);
+  // CON_DIFERENCIAS es una rama de VALIDANDO: se ubica a esa altura en el lineal.
+  const efectivo: Estado = estado === 'CON_DIFERENCIAS' ? 'VALIDANDO' : estado;
+  const idx = ESTADOS_LINEA.indexOf(efectivo);
   return (
     <div className="flex items-center gap-1 overflow-x-auto pb-1">
-      {ESTADOS_ORDEN.map((e, i) => (
+      {ESTADOS_LINEA.map((e, i) => (
         <div key={e} className="flex items-center gap-1 shrink-0">
           <div className={`h-2 w-2 rounded-full ${i <= idx ? 'bg-brand-green-ink' : 'bg-slate-300'}`} />
           <span className={`text-xs ${i === idx ? 'font-semibold text-slate-900' : 'text-slate-400'}`}>
-            {ESTADO_LABEL[e]}
+            {e === 'VALIDANDO' && estado === 'CON_DIFERENCIAS' ? 'Con diferencias' : ESTADO_LABEL[e]}
           </span>
-          {i < ESTADOS_ORDEN.length - 1 && <div className={`h-px w-4 ${i < idx ? 'bg-brand-green-ink' : 'bg-slate-200'}`} />}
+          {i < ESTADOS_LINEA.length - 1 && <div className={`h-px w-4 ${i < idx ? 'bg-brand-green-ink' : 'bg-slate-200'}`} />}
         </div>
       ))}
     </div>
@@ -650,75 +660,155 @@ function PanelRecibir({ d, onAccion }: { d: Detalle; onAccion: (fn: () => Promis
   );
 }
 
-function PanelIngreso({ id, onAccion }: { id: number; onAccion: (fn: () => Promise<unknown>) => void }) {
-  const [ubi, setUbi] = useState('');
+function PanelIniciar({ id, onAccion }: { id: number; onAccion: (fn: () => Promise<unknown>) => void }) {
   return (
     <Card>
-      <h2 className="font-semibold mb-3">Ingreso a depósito</h2>
-      <Field label="Ubicación de espera (opcional)"><input className="input" value={ubi} onChange={(e) => setUbi(e.target.value)} placeholder="Ej: DEV-01" /></Field>
-      <p className="text-xs text-slate-400 mt-1.5">Informativa: podés registrar el ingreso sin completarla.</p>
-      <button className="btn-accent mt-4" onClick={() => onAccion(() => api.patch(`/devoluciones/autorizaciones/${id}/ingreso`, { ubicacionEspera: ubi || undefined }))}>
-        Registrar ingreso
+      <h2 className="font-semibold mb-1">En proceso de devolución</h2>
+      <p className="text-xs text-slate-400 mb-3">Arrancá el proceso para empezar a pesar los bultos.</p>
+      <button className="btn-accent" onClick={() => onAccion(() => api.patch(`/devoluciones/autorizaciones/${id}/iniciar`))}>
+        Iniciar proceso de devolución
       </button>
     </Card>
   );
 }
 
-/** Asignación del lote del ERP antes del cierre + preview de la comparación. */
+/** Comparación declarado vs lote del ERP (reusada en Validando / Con diferencias). */
+function TablaComparacion({ rec }: { rec: LineaRec[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="text-slate-500 text-left"><tr>
+          <th className="py-1 font-medium">Título</th><th className="font-medium">ISBN</th><th className="font-medium text-right">Declarado</th><th className="font-medium text-right">ERP (Fierro)</th><th className="font-medium text-right">Diferencia</th>
+        </tr></thead>
+        <tbody className="divide-y divide-slate-100">
+          {rec.map((r) => {
+            const dif = r.diferencia;
+            const declaradoSinErp = r.cantidadFierro === null && r.declarado > 0;
+            const resalta = (dif !== null && dif !== 0) || declaradoSinErp;
+            return (
+              <tr key={r.isbn} className={resalta ? 'bg-amber-50' : undefined}>
+                <td className="py-1 pr-2 max-w-48 truncate">{r.titulo ?? '—'}</td>
+                <td className="tabnum text-slate-500">{r.isbn}</td>
+                <td className="text-right tabnum">{r.declarado}</td>
+                <td className="text-right tabnum">{r.cantidadFierro ?? '—'}</td>
+                <td className={`text-right tabnum font-semibold ${declaradoSinErp ? 'text-amber-700' : dif === null ? 'text-slate-400' : dif === 0 ? 'text-emerald-700' : 'text-amber-700'}`}>{dif === null ? '—' : dif > 0 ? `+${dif}` : dif}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Procesando: se ingresa el nº de lote del ERP → pasa a Validando. */
 function PanelLote({ d, onDone, onError }: { d: Detalle; onDone: () => void; onError: (s: string) => void }) {
   const [lote, setLote] = useState(d.loteCodigo ?? '');
-  const [rec, setRec] = useState<LineaRec[] | null>(null);
   const [guardando, setGuardando] = useState(false);
-
-  const cargarComparacion = useCallback(() => {
-    if (!d.loteCodigo) { setRec(null); return; }
-    api.get<LineaRec[]>(`/devoluciones/autorizaciones/${d.id}/reconciliacion`).then(setRec).catch(() => setRec(null));
-  }, [d.id, d.loteCodigo]);
-  useEffect(cargarComparacion, [cargarComparacion]);
-
-  const asignar = async () => {
-    if (!lote.trim()) { onError('Ingresá el código del lote del ERP.'); return; }
-    setGuardando(true);
-    onError('');
+  const ingresar = async () => {
+    if (!lote.trim()) { onError('Ingresá el número de lote de devolución de Fierro.'); return; }
+    setGuardando(true); onError('');
     try {
       await api.patch(`/devoluciones/autorizaciones/${d.id}/lote`, { loteCodigo: lote.trim() });
       onDone();
     } catch (e) { onError((e as Error).message); }
     finally { setGuardando(false); }
   };
+  return (
+    <Card>
+      <h2 className="font-semibold mb-1">Procesando — lote del ERP</h2>
+      <p className="text-xs text-slate-400 mb-3">Ingresá el número de lote de devolución de Fierro. Pasa a “Validando”, donde se compara con lo declarado cuando el lote llegue del ERP.</p>
+      <div className="flex items-end gap-2">
+        <Field label="Nº de lote de Fierro"><input className="input w-56" value={lote} onChange={(e) => setLote(e.target.value)} placeholder="Ej: RL-00012345" /></Field>
+        <button className="btn-accent" onClick={ingresar} disabled={guardando}>Pasar a validación</button>
+      </div>
+    </Card>
+  );
+}
+
+/** Edición del nº de lote (reusada en Validando y Con diferencias). */
+function CorregirLote({ id, loteActual, onDone, onError }: { id: number; loteActual: string | null; onDone: () => void; onError: (s: string) => void }) {
+  const { puede } = useAuth();
+  const [lote, setLote] = useState(loteActual ?? '');
+  const [editando, setEditando] = useState(false);
+  const puedeCorregir = puede(PERMISOS.DEPOSITO_CONTROLAR) || puede(PERMISOS.DEVOLUCION_VALIDAR);
+  if (!puedeCorregir) return null;
+
+  const corregir = async () => {
+    if (!lote.trim()) { onError('Ingresá el número de lote.'); return; }
+    onError('');
+    try { await api.patch(`/devoluciones/autorizaciones/${id}/lote`, { loteCodigo: lote.trim() }); onDone(); }
+    catch (e) { onError((e as Error).message); }
+  };
+
+  return editando ? (
+    <div className="flex items-end gap-2 mb-3">
+      <Field label="Corregir nº de lote"><input className="input w-56" value={lote} onChange={(e) => setLote(e.target.value)} /></Field>
+      <button className="btn-primary" onClick={corregir}>Guardar</button>
+      <button className="btn-ghost" onClick={() => { setLote(loteActual ?? ''); setEditando(false); }}>Cancelar</button>
+    </div>
+  ) : (
+    <button className="btn-ghost h-8 mb-3" onClick={() => setEditando(true)}>Corregir lote</button>
+  );
+}
+
+/** Validando: espera el lote de Fierro, muestra la comparación; permite corregir el lote. */
+function PanelValidando({ d, onDone, onError }: { d: Detalle; onDone: () => void; onError: (s: string) => void }) {
+  const [rec, setRec] = useState<LineaRec[] | null>(null);
+  const [fallo, setFallo] = useState(false);
+  useEffect(() => {
+    api.get<LineaRec[]>(`/devoluciones/autorizaciones/${d.id}/reconciliacion`)
+      .then((r) => { setRec(r); setFallo(false); })
+      .catch((e) => { setRec(null); setFallo(true); onError((e as Error).message); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d.id]);
+  const sinLote = rec !== null && rec.every((r) => r.cantidadFierro === null);
 
   return (
     <Card>
-      <h2 className="font-semibold mb-1">Lote del ERP (validación)</h2>
-      <p className="text-xs text-slate-400 mb-3">Asigná el lote de Fierro: un chequeo automático cada 15 min compara lo declarado contra el ERP y avisa a los responsables.</p>
-      <div className="flex items-end gap-2">
-        <Field label="Lote de devolución (ERP)"><input className="input w-56" value={lote} onChange={(e) => setLote(e.target.value)} placeholder="Ej: RL-00012345" /></Field>
-        <button className="btn-primary" onClick={asignar} disabled={guardando}>{d.loteCodigo ? 'Actualizar' : 'Asignar'}</button>
-      </div>
-      {d.loteCodigo && rec && rec.length > 0 && (
-        <div className="mt-4 overflow-x-auto">
-          <p className="text-xs text-slate-500 mb-2">Comparación declarado vs ERP:</p>
-          <table className="w-full text-sm">
-            <thead className="text-slate-500 text-left"><tr>
-              <th className="py-1 font-medium">Título</th><th className="font-medium text-right">Declarado</th><th className="font-medium text-right">ERP</th><th className="font-medium text-right">Dif.</th>
-            </tr></thead>
-            <tbody className="divide-y divide-slate-100">
-              {rec.map((r) => {
-                const dif = r.diferencia;
-                const declaradoSinErp = r.cantidadFierro === null && r.declarado > 0;
-                const resalta = (dif !== null && dif !== 0) || declaradoSinErp;
-                return (
-                  <tr key={r.isbn} className={resalta ? 'bg-amber-50' : undefined}>
-                    <td className="py-1 pr-2 max-w-48 truncate">{r.titulo ?? r.isbn}</td>
-                    <td className="text-right tabnum">{r.declarado}</td>
-                    <td className="text-right tabnum">{r.cantidadFierro ?? '—'}</td>
-                    <td className={`text-right tabnum font-semibold ${declaradoSinErp ? 'text-amber-700' : dif === null ? 'text-slate-400' : dif === 0 ? 'text-emerald-700' : 'text-amber-700'}`}>{dif === null ? '—' : dif > 0 ? `+${dif}` : dif}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      <h2 className="font-semibold mb-1 text-purple-700">Validando contra el ERP</h2>
+      <p className="text-sm text-slate-500 mb-1">Lote del ERP: <b className="tabnum">{d.loteCodigo || '—'}</b></p>
+      <p className="text-xs text-slate-400 mb-3">
+        El sistema compara lo declarado contra el lote de Fierro cada 15 min. Si coincide pasa a Procesado; si hay diferencias, a “Con diferencias”.
+        {sinLote && ' El lote todavía no llegó del ERP: queda esperando.'}
+        {fallo && ' (No se pudo cargar la comparación.)'}
+      </p>
+      <CorregirLote id={d.id} loteActual={d.loteCodigo} onDone={onDone} onError={onError} />
+      {rec && rec.length > 0 && <TablaComparacion rec={rec} />}
+    </Card>
+  );
+}
+
+/** Con diferencias: el responsable revisa, observa y confirma → Procesado. */
+function PanelConDiferencias({ d, onDone, onError }: { d: Detalle; onDone: () => void; onError: (s: string) => void }) {
+  const { puede } = useAuth();
+  const [rec, setRec] = useState<LineaRec[] | null>(null);
+  const [obs, setObs] = useState('');
+  const [confirmando, setConfirmando] = useState(false);
+  useEffect(() => { api.get<LineaRec[]>(`/devoluciones/autorizaciones/${d.id}/reconciliacion`).then(setRec).catch(() => setRec(null)); }, [d.id]);
+
+  const confirmar = async () => {
+    if (!obs.trim()) { onError('Cargá una observación sobre las diferencias.'); return; }
+    setConfirmando(true); onError('');
+    try { await api.patch(`/devoluciones/autorizaciones/${d.id}/confirmar`, { observaciones: obs.trim() }); onDone(); }
+    catch (e) { onError((e as Error).message); }
+    finally { setConfirmando(false); }
+  };
+
+  return (
+    <Card className="border-rose-200">
+      <h2 className="font-semibold mb-1 flex items-center gap-2 text-rose-700"><AlertTriangle className="h-5 w-5" /> Con diferencias</h2>
+      <p className="text-sm text-slate-500 mb-1">Lote del ERP: <b className="tabnum">{d.loteCodigo || '—'}</b></p>
+      <p className="text-xs text-slate-400 mb-3">Lo declarado por el cliente no coincide con el lote del ERP. Si el lote estaba mal, corregilo (vuelve a validar); si las diferencias son reales, dejá una observación y confirmá.</p>
+      <CorregirLote id={d.id} loteActual={d.loteCodigo} onDone={onDone} onError={onError} />
+      {rec && rec.length > 0 && <TablaComparacion rec={rec} />}
+      {puede(PERMISOS.DEVOLUCION_VALIDAR) ? (
+        <div className="mt-4">
+          <Field label="Observación sobre las diferencias (obligatoria)"><input className="input" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Qué se controló / cómo se resuelven las diferencias" /></Field>
+          <button className="btn-accent mt-3 disabled:opacity-50" onClick={confirmar} disabled={confirmando || !obs.trim()}>Confirmar y procesar</button>
         </div>
+      ) : (
+        <p className="mt-3 text-xs text-slate-400">Solo un responsable con permiso puede confirmar.</p>
       )}
     </Card>
   );
@@ -726,18 +816,13 @@ function PanelLote({ d, onDone, onError }: { d: Detalle; onDone: () => void; onE
 
 function PanelControl({ d, onDone, onError }: { d: Detalle; onDone: () => void; onError: (s: string) => void }) {
   const [activo, setActivo] = useState<number | null>(null);
-  const [lote, setLote] = useState(d.loteCodigo ?? '');
-  const [destBueno, setDestBueno] = useState('');
-  const [destMalo, setDestMalo] = useState('');
   const [obs, setObs] = useState('');
   const todosControlados = d.bultos.length > 0 && d.bultos.every((b) => b.estadoControl === 'CONTROLADO');
 
-  const cerrar = async () => {
-    if (!lote.trim()) { onError('Ingresá el lote de devolución del ERP para cerrar.'); return; }
+  const terminarPesaje = async () => {
     try {
-      await api.patch(`/devoluciones/autorizaciones/${d.id}/cierre`, {
-        loteCodigo: lote.trim(),
-        ubicacionDestinoBueno: destBueno || undefined, ubicacionDestinoMalo: destMalo || undefined, observaciones: obs || undefined,
+      await api.patch(`/devoluciones/autorizaciones/${d.id}/terminar-pesaje`, {
+        observaciones: obs || undefined,
       });
       onDone();
     } catch (e) {
@@ -777,20 +862,11 @@ function PanelControl({ d, onDone, onError }: { d: Detalle; onDone: () => void; 
       </div>
 
       <div className="mt-5 pt-5 border-t border-slate-100">
-        <h3 className="font-semibold mb-3">Cierre → reconciliación con el ERP</h3>
-        <Field label="Lote de devolución (ERP) — obligatorio">
-          <input className="input" value={lote} onChange={(e) => setLote(e.target.value)} placeholder="Ej: RL-00012345" />
-        </Field>
-        <p className="text-xs text-slate-400 mt-1 mb-3">Se compara lo declarado por el cliente contra el lote del ERP. El lote tiene que estar importado.</p>
-        <div className="grid sm:grid-cols-2 gap-3">
-          <Field label="Destino BUENOS (picking/pallet) — opcional"><input className="input" value={destBueno} onChange={(e) => setDestBueno(e.target.value)} placeholder="Ej: A-01" /></Field>
-          <Field label="Destino MALOS (dañados/cuarentena) — opcional"><input className="input" value={destMalo} onChange={(e) => setDestMalo(e.target.value)} placeholder="Ej: DAN-01" /></Field>
-        </div>
-        <Field label="Observación (si peso/bultos difieren)"><input className="input mt-1" value={obs} onChange={(e) => setObs(e.target.value)} /></Field>
-        <button className="btn-accent mt-4 disabled:opacity-50" disabled={!todosControlados || !lote.trim()} onClick={cerrar}>
-          Cerrar y procesar
+        <Field label="Observación (si la suma de pesos difiere del declarado)"><input className="input mt-1" value={obs} onChange={(e) => setObs(e.target.value)} /></Field>
+        <button className="btn-accent mt-4 disabled:opacity-50" disabled={!todosControlados} onClick={terminarPesaje}>
+          Terminar pesaje
         </button>
-        {!todosControlados && <p className="text-xs text-amber-600 mt-2">Faltan bultos por controlar.</p>}
+        {!todosControlados && <p className="text-xs text-amber-600 mt-2">Faltan bultos por pesar.</p>}
       </div>
     </Card>
   );

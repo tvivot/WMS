@@ -21,9 +21,11 @@ describe('AutorizacionController — permisos por endpoint', () => {
     ['declarar', [PERMISOS.SOLICITUD_CREAR]],
     ['despachar', [PERMISOS.SOLICITUD_CREAR]],
     ['recibir', [PERMISOS.DEPOSITO_RECIBIR]],
-    ['ingreso', [PERMISOS.DEPOSITO_INGRESAR]],
+    ['iniciarProceso', [PERMISOS.DEPOSITO_INGRESAR]],
     ['controlar', [PERMISOS.DEPOSITO_CONTROLAR]],
-    ['cerrar', [PERMISOS.DEPOSITO_CONTROLAR]],
+    ['terminarPesaje', [PERMISOS.DEPOSITO_CONTROLAR]],
+    ['ingresarLote', [PERMISOS.DEPOSITO_CONTROLAR, PERMISOS.DEVOLUCION_VALIDAR]],
+    ['confirmar', [PERMISOS.DEVOLUCION_VALIDAR]],
     ['corregir', [PERMISOS.DEVOLUCION_CORREGIR]],
   ])('%s exige %p', (metodo, esperado) => {
     expect(permisoDe(metodo)).toEqual(esperado);

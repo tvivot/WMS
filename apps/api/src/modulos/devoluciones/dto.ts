@@ -114,11 +114,11 @@ export class RecibirDto {
   observaciones?: string;
 }
 
-export class IngresoDto {
-  // Informativa: opcional. Si se carga, el puerto la valida.
+/** Terminar pesaje: En proceso de devolución → Procesando (observación si difiere el peso). */
+export class TerminarPesajeDto {
   @IsOptional()
   @IsString()
-  ubicacionEspera?: string;
+  observaciones?: string;
 }
 
 /**
@@ -170,7 +170,7 @@ export class ResolverExcepcionDto {
   motivo?: string;
 }
 
-/** Asignación del lote del ERP a una devolución antes del cierre (validación periódica). */
+/** Ingreso/corrección del nº de lote del ERP (Procesando → Validando, o corregir en Validando). */
 export class AsignarLoteDto {
   @IsString()
   @MinLength(1)
@@ -178,17 +178,14 @@ export class AsignarLoteDto {
   loteCodigo!: string;
 }
 
-export class CerrarDto {
-  // Lote de devolución del ERP (Fierro). Obligatorio para cerrar, pero opcional en
-  // el DTO: si no viene, se usa el ya asignado a la devolución. El servicio exige
-  // que exista alguno.
-  @IsOptional()
+/** Confirmación de una devolución con diferencias (Con diferencias → Procesado). */
+export class ConfirmarDto {
+  // Observación obligatoria del responsable sobre las diferencias revisadas.
   @IsString()
   @MinLength(1)
-  @MaxLength(60)
-  loteCodigo?: string;
+  observaciones!: string;
 
-  // Destinos informativos: opcionales para procesar. Si se cargan, el puerto los valida.
+  // Destinos informativos: opcionales. Si se cargan, el puerto los valida.
   @IsOptional()
   @IsString()
   ubicacionDestinoBueno?: string;
@@ -196,8 +193,4 @@ export class CerrarDto {
   @IsOptional()
   @IsString()
   ubicacionDestinoMalo?: string;
-
-  @IsOptional()
-  @IsString()
-  observaciones?: string;
 }

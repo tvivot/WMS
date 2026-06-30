@@ -18,7 +18,7 @@ export interface DevolucionEstadoCambiadoEvent {
   estadoAnterior: string;
   estadoNuevo: string;
   actorId: number;
-  actorTipo: 'usuario' | 'cliente';
+  actorTipo: 'usuario' | 'cliente' | 'sistema';
   ts: string;
 }
 

@@ -325,7 +325,10 @@ enum DevEstado {
   APROBADO
   EN_TRANSITO
   ENTREGADO
-  INGRESO_DEPOSITO
+  EN_PROCESO_DEVOLUCION
+  PROCESANDO
+  VALIDANDO
+  CON_DIFERENCIAS
   PROCESADO
 }
 
@@ -369,8 +372,9 @@ model DevAutorizacion {
   // asignar antes del cierre (para la validación periódica) y es obligatorio para
   // Procesar. Referencia por código a dev_lote (mismo módulo); no FK.
   loteCodigo            String? @map("lote_codigo") @db.VarChar(60)
-  // Firma (hash) de la última reconciliación notificada por el chequeo periódico
-  // de lotes: evita re-mandar el mail salvo que la comparación cambie.
+  // RESERVADO (sin uso). La dedup del aviso de validación es el cambio de estado
+  // (la devolución sale de VALIDANDO al procesarse o pasar a CON_DIFERENCIAS), no
+  // una firma. Se mantiene la columna para no migrar; podría retirarse a futuro.
   loteValidacionFirma   String? @map("lote_validacion_firma") @db.VarChar(64)
 
   // Ubicaciones: CÓDIGO string, validado por UbicacionResolverPort (NO FK).

@@ -3,7 +3,10 @@ export type Estado =
   | 'APROBADO'
   | 'EN_TRANSITO'
   | 'ENTREGADO'
-  | 'INGRESO_DEPOSITO'
+  | 'EN_PROCESO_DEVOLUCION'
+  | 'PROCESANDO'
+  | 'VALIDANDO'
+  | 'CON_DIFERENCIAS'
   | 'PROCESADO';
 
 export const ESTADOS_ORDEN: Estado[] = [
@@ -11,7 +14,26 @@ export const ESTADOS_ORDEN: Estado[] = [
   'APROBADO',
   'EN_TRANSITO',
   'ENTREGADO',
-  'INGRESO_DEPOSITO',
+  'EN_PROCESO_DEVOLUCION',
+  'PROCESANDO',
+  'VALIDANDO',
+  'CON_DIFERENCIAS',
+  'PROCESADO',
+];
+
+/**
+ * Camino LINEAL para el stepper. CON_DIFERENCIAS es una RAMA de VALIDANDO (no un
+ * paso lineal): se excluye para no marcarlo como "pasado" en el camino feliz.
+ * Una devolución en CON_DIFERENCIAS se muestra a la altura de VALIDANDO.
+ */
+export const ESTADOS_LINEA: Estado[] = [
+  'A_APROBAR',
+  'APROBADO',
+  'EN_TRANSITO',
+  'ENTREGADO',
+  'EN_PROCESO_DEVOLUCION',
+  'PROCESANDO',
+  'VALIDANDO',
   'PROCESADO',
 ];
 
@@ -20,7 +42,10 @@ export const ESTADO_LABEL: Record<Estado, string> = {
   APROBADO: 'Aprobado',
   EN_TRANSITO: 'En tránsito',
   ENTREGADO: 'Entregado',
-  INGRESO_DEPOSITO: 'Ingreso a depósito',
+  EN_PROCESO_DEVOLUCION: 'En proceso de devolución',
+  PROCESANDO: 'Procesando',
+  VALIDANDO: 'Validando',
+  CON_DIFERENCIAS: 'Con diferencias',
   PROCESADO: 'Procesado',
 };
 
@@ -30,7 +55,10 @@ export const ESTADO_CLASE: Record<Estado, string> = {
   APROBADO: 'bg-sky-100 text-sky-800',
   EN_TRANSITO: 'bg-indigo-100 text-indigo-800',
   ENTREGADO: 'bg-violet-100 text-violet-800',
-  INGRESO_DEPOSITO: 'bg-cyan-100 text-cyan-800',
+  EN_PROCESO_DEVOLUCION: 'bg-cyan-100 text-cyan-800',
+  PROCESANDO: 'bg-blue-100 text-blue-800',
+  VALIDANDO: 'bg-purple-100 text-purple-800',
+  CON_DIFERENCIAS: 'bg-rose-100 text-rose-800',
   PROCESADO: 'bg-emerald-100 text-emerald-800',
 };
 
@@ -51,4 +79,5 @@ export const PERMISOS = {
   DEVOLUCION_CORREGIR: 'devolucion.corregir',
   DEVOLUCION_STOCK_VER: 'devolucion.stock.ver',
   DEVOLUCION_AUTORIZAR_EXCEPCION: 'devolucion.autorizar_excepcion',
+  DEVOLUCION_VALIDAR: 'devolucion.validar',
 } as const;

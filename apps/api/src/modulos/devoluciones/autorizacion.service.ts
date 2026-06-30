@@ -7,7 +7,6 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Readable } from 'node:stream';
-import { createHash } from 'node:crypto';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { DevEstado, DevEstadoControl, DevExcepcionEstado, Prisma } from '@prisma/client';
 import { Workbook } from 'exceljs';
@@ -17,15 +16,16 @@ import { CatalogoService } from '../../core/catalogo/catalogo.service';
 import { normalizarIsbn } from '../../core/catalogo/isbn.util';
 import type { JwtPayload } from '../../core/auth/jwt-payload';
 import {
-  CerrarDto,
+  AsignarLoteDto,
+  ConfirmarDto,
   ControlarBultoDto,
   CorregirControlDto,
   CrearAutorizacionDto,
   DeclararDto,
-  IngresoDto,
   RecibirDto,
   ResolverExcepcionDto,
   SolicitarExcepcionDto,
+  TerminarPesajeDto,
 } from './dto';
 import {
   DEVOLUCION_ESTADO_CAMBIADO,
@@ -124,9 +124,16 @@ const ESTADO_LABEL_EXPORT: Record<DevEstado, string> = {
   APROBADO: 'Aprobado',
   EN_TRANSITO: 'En tránsito',
   ENTREGADO: 'Entregado',
-  INGRESO_DEPOSITO: 'Ingreso a depósito',
+  EN_PROCESO_DEVOLUCION: 'En proceso de devolución',
+  PROCESANDO: 'Procesando',
+  VALIDANDO: 'Validando',
+  CON_DIFERENCIAS: 'Con diferencias',
   PROCESADO: 'Procesado',
 };
+
+/** Actor para las transiciones que dispara el sistema (cron de validación). */
+type ActorTransicion = { sub: number; tipo: 'usuario' | 'cliente' | 'sistema' };
+const SISTEMA: ActorTransicion = { sub: 0, tipo: 'sistema' };
 
 @Injectable()
 export class AutorizacionService {
@@ -180,7 +187,7 @@ export class AutorizacionService {
 
   private async transicionar(
     id: number,
-    actor: JwtPayload,
+    actor: ActorTransicion,
     estadoAnterior: DevEstado,
     estadoNuevo: DevEstado,
     extra: Record<string, unknown> = {},
@@ -787,24 +794,18 @@ export class AutorizacionService {
     return limpio;
   }
 
-  /** Ingreso a depósito: registra ubicación de espera (informativa, vía puerto). */
-  async ingreso(actor: JwtPayload, id: number, dto: IngresoDto) {
+  /** Entregado → En proceso de devolución: arranca el proceso (solo se pesará). */
+  async iniciarProceso(actor: JwtPayload, id: number) {
     const a = await this.obtenerOr404(id);
     this.exigirEstado(a.estado, DevEstado.ENTREGADO);
-    const ubicacionEspera = await this.ubicacionOpcional(
-      dto.ubicacionEspera,
-      'devoluciones',
-      'Ubicación de espera',
-    );
-    return this.transicionar(id, actor, a.estado, DevEstado.INGRESO_DEPOSITO, {
-      ubicacionEspera,
-    });
+    await this.transicionar(id, actor, a.estado, DevEstado.EN_PROCESO_DEVOLUCION);
+    return this.detalle(id);
   }
 
   /**
-   * Control de un bulto: se PESA y se marca controlado (estado INGRESO_DEPOSITO).
-   * El conteo de libros por ISBN se hace en OTRO proceso (ya no acá); al cerrar,
-   * la reconciliación compara lo declarado por el cliente contra el lote del ERP.
+   * Control de un bulto: se PESA y se marca controlado (estado En proceso de
+   * devolución). El conteo de libros por ISBN se hace en OTRO proceso; la
+   * reconciliación compara lo declarado por el cliente contra el lote del ERP.
    */
   async controlarBulto(
     actor: JwtPayload,
@@ -813,7 +814,7 @@ export class AutorizacionService {
     dto: ControlarBultoDto,
   ) {
     const a = await this.obtenerOr404(id);
-    this.exigirEstado(a.estado, DevEstado.INGRESO_DEPOSITO);
+    this.exigirEstado(a.estado, DevEstado.EN_PROCESO_DEVOLUCION);
     const bulto = await this.prisma.devBulto.findUnique({
       where: { autorizacionId_numero: { autorizacionId: id, numero } },
     });
@@ -834,49 +835,24 @@ export class AutorizacionService {
     return this.detalle(id);
   }
 
-  /** Cierre: reconciliación contra el lote del ERP + destinos + Procesado + evento. */
-  async cerrar(actor: JwtPayload, id: number, dto: CerrarDto) {
+  /**
+   * En proceso de devolución → Procesando: termina el pesaje. Exige todos los
+   * bultos pesados; chequea suma de pesos vs peso total declarado (no bloquea,
+   * exige observación si difiere).
+   */
+  async terminarPesaje(actor: JwtPayload, id: number, dto: TerminarPesajeDto) {
     const a = await this.obtenerOr404(id);
-    this.exigirEstado(a.estado, DevEstado.INGRESO_DEPOSITO);
-
-    // Lote del ERP (Fierro): obligatorio para cerrar. Se toma el del DTO o, si no
-    // viene, el ya asignado a la devolución. Debe existir y ser del mismo cliente.
-    const loteCodigo = await this.validarLoteDeCliente(
-      dto.loteCodigo ?? a.loteCodigo ?? '',
-      a.clienteId,
-    );
-
+    this.exigirEstado(a.estado, DevEstado.EN_PROCESO_DEVOLUCION);
     const bultos = await this.prisma.devBulto.findMany({ where: { autorizacionId: id } });
     if (bultos.length === 0) {
-      throw new BadRequestException('No hay bultos para cerrar');
+      throw new BadRequestException('No hay bultos para procesar');
     }
-    const sinControlar = bultos.filter(
-      (b) => b.estadoControl !== DevEstadoControl.CONTROLADO,
-    );
-    if (sinControlar.length > 0) {
-      throw new BadRequestException(
-        `Hay ${sinControlar.length} bulto(s) sin controlar; no se puede procesar`,
-      );
+    const sinPesar = bultos.filter((b) => b.estadoControl !== DevEstadoControl.CONTROLADO);
+    if (sinPesar.length > 0) {
+      throw new BadRequestException(`Hay ${sinPesar.length} bulto(s) sin pesar`);
     }
-
-    // Ubicaciones destino INFORMATIVAS (opcionales): buenos a picking/pallet,
-    // malos a dañados/cuarentena. No bloquean el cierre; si se cargan, se validan.
-    const ubicacionDestinoBueno = await this.ubicacionOpcional(
-      dto.ubicacionDestinoBueno,
-      'picking',
-      'Ubicación destino (buenos)',
-    );
-    const ubicacionDestinoMalo = await this.ubicacionOpcional(
-      dto.ubicacionDestinoMalo,
-      'dañados',
-      'Ubicación destino (malos)',
-    );
-
-    // Control de peso: suma de bultos vs peso total declarado (no bloquea, exige observación).
     const sumaPesos = bultos.reduce((acc, b) => acc + (b.peso ? Number(b.peso) : 0), 0);
     const declarado = a.pesoTotalDeclarado ? Number(a.pesoTotalDeclarado) : null;
-    // La observación debe ser PROPIA del cierre: una observación previa
-    // (p.ej. de la recepción) no justifica la diferencia de peso.
     if (
       declarado !== null &&
       Math.abs(sumaPesos - declarado) > PESO_TOLERANCIA &&
@@ -886,165 +862,168 @@ export class AutorizacionService {
         `Suma de pesos (${sumaPesos}) ≠ peso declarado (${declarado}): observación obligatoria`,
       );
     }
+    await this.transicionar(id, actor, a.estado, DevEstado.PROCESANDO, {
+      observaciones: this.acumularObservacion(a.observaciones, 'Pesaje', dto.observaciones),
+    });
+    return this.detalle(id);
+  }
 
-    // Reconciliación contra el lote del ERP. El gate de consignación ya se aplicó
-    // al declarar (saldo + excepciones); acá no se re-chequea (no hay "recibido").
-    const reconciliacion = await this.calcularReconciliacion(id, loteCodigo);
-
-    const actualizada = await this.transicionar(
-      id,
-      actor,
-      a.estado,
-      DevEstado.PROCESADO,
-      {
-        loteCodigo,
-        ubicacionDestinoBueno,
-        ubicacionDestinoMalo,
-        observaciones: this.acumularObservacion(a.observaciones, 'Cierre', dto.observaciones),
-      },
+  /**
+   * Procesando → Validando: se ingresa el nº de lote del ERP (Fierro). NO exige
+   * que el lote ya exista (puede no haber llegado por la API): la validación la
+   * hace el cron en Validando. En Validando se puede CORREGIR el lote sin cambiar
+   * de estado (sigue validando con el nuevo código).
+   */
+  async ingresarLote(actor: JwtPayload, id: number, dto: AsignarLoteDto) {
+    const a = await this.obtenerOr404(id);
+    const codigo = dto.loteCodigo.trim();
+    if (!codigo) throw new BadRequestException('El número de lote es obligatorio');
+    // Procesando: ingresa el lote y pasa a Validando.
+    // Con diferencias: corregir el lote VUELVE a Validando para re-comparar (salida
+    // del atasco si el lote estaba mal tipeado).
+    if (a.estado === DevEstado.PROCESANDO || a.estado === DevEstado.CON_DIFERENCIAS) {
+      await this.transicionar(id, actor, a.estado, DevEstado.VALIDANDO, { loteCodigo: codigo });
+      return this.detalle(id);
+    }
+    // Validando: corrige el lote sin cambiar de estado (sigue validando).
+    if (a.estado === DevEstado.VALIDANDO) {
+      await this.prisma.devAutorizacion.update({ where: { id }, data: { loteCodigo: codigo } });
+      await this.auditoria.registrar({
+        actorId: actor.sub,
+        actorTipo: actor.tipo,
+        accion: 'corregir_lote',
+        entidad: 'dev_autorizacion',
+        entidadId: String(id),
+        detalle: { loteCodigo: codigo },
+      });
+      return this.detalle(id);
+    }
+    throw new BadRequestException(
+      'El número de lote se ingresa/corrige en Procesando, Validando o Con diferencias',
     );
+  }
 
+  /**
+   * Con diferencias → Procesado: el responsable revisa las diferencias, carga una
+   * observación obligatoria (qué controló) y confirma. Permiso devolucion.validar.
+   */
+  async confirmarConDiferencias(actor: JwtPayload, id: number, dto: ConfirmarDto) {
+    const a = await this.obtenerOr404(id);
+    this.exigirEstado(a.estado, DevEstado.CON_DIFERENCIAS);
+    if (!dto.observaciones?.trim()) {
+      throw new BadRequestException('Cargá una observación sobre las diferencias para confirmar');
+    }
+    const reconciliacion = await this.calcularReconciliacion(id, a.loteCodigo ?? null);
+    const actualizada = await this.procesar(actor, a, reconciliacion, {
+      observaciones: dto.observaciones,
+      ubicacionDestinoBueno: dto.ubicacionDestinoBueno,
+      ubicacionDestinoMalo: dto.ubicacionDestinoMalo,
+    });
+    return { autorizacion: actualizada, reconciliacion };
+  }
+
+  /**
+   * Transición a Procesado + emisión de devolucion.procesada. La usan el camino
+   * automático (cron, sin diferencias) y el manual (responsable confirma). Los
+   * destinos son informativos y opcionales (vía puerto).
+   */
+  private async procesar(
+    actor: ActorTransicion,
+    a: { id: number; estado: DevEstado; clienteId: number; depositoId: number; observaciones: string | null },
+    reconciliacion: ReconciliacionLinea[],
+    opts: { observaciones?: string; ubicacionDestinoBueno?: string; ubicacionDestinoMalo?: string } = {},
+  ) {
+    const ubicacionDestinoBueno = await this.ubicacionOpcional(
+      opts.ubicacionDestinoBueno,
+      'picking',
+      'Ubicación destino (buenos)',
+    );
+    const ubicacionDestinoMalo = await this.ubicacionOpcional(
+      opts.ubicacionDestinoMalo,
+      'dañados',
+      'Ubicación destino (malos)',
+    );
+    const actualizada = await this.transicionar(a.id, actor, a.estado, DevEstado.PROCESADO, {
+      ubicacionDestinoBueno,
+      ubicacionDestinoMalo,
+      observaciones: this.acumularObservacion(a.observaciones, 'Cierre', opts.observaciones),
+    });
     const ev: DevolucionProcesadaEvent = {
-      autorizacionId: id,
-      clienteId: a.clienteId,
-      depositoId: a.depositoId,
+      autorizacionId: a.id,
+      clienteId: actualizada.clienteId,
+      depositoId: actualizada.depositoId,
       reconciliacion,
       ubicacionDestinoBueno: ubicacionDestinoBueno ?? undefined,
       ubicacionDestinoMalo: ubicacionDestinoMalo ?? undefined,
       ts: new Date().toISOString(),
     };
-    // NO mueve stock: solo registra destino y emite el evento (lo consume Inventario).
     this.eventos.emit(DEVOLUCION_PROCESADA, ev);
-
-    return { autorizacion: actualizada, reconciliacion };
+    return actualizada;
   }
 
   /**
-   * Valida un código de lote del ERP para un cliente: existe (importado) y es del
-   * mismo cliente (compara nroCliente trimeando ambos lados; no se saltea con
-   * lote.nroCliente vacío). Devuelve el código normalizado (trim).
+   * Validación periódica (la dispara el cron cada 15 min): por cada devolución en
+   * VALIDANDO con lote asignado, espera a que el lote llegue de Fierro y compara
+   * declarado vs lote. Sin diferencias → PROCESADO (automático). Con diferencias →
+   * CON_DIFERENCIAS + emite devolucion.lote_evaluado (Notificaciones avisa a los
+   * responsables). El cambio de estado es la dedup natural (sale de VALIDANDO).
+   * Nunca lanza por una devolución: un fallo aislado no frena el resto.
    */
-  private async validarLoteDeCliente(
-    loteCodigoRaw: string,
-    clienteId: number,
-  ): Promise<string> {
-    const loteCodigo = (loteCodigoRaw ?? '').trim();
-    if (!loteCodigo) {
-      throw new BadRequestException('El lote del ERP es obligatorio');
-    }
-    const lote = await this.prisma.devLote.findUnique({ where: { codigo: loteCodigo } });
-    if (!lote) {
-      throw new BadRequestException(
-        `Lote "${loteCodigo}" no encontrado: ¿se importó desde el ERP?`,
-      );
-    }
-    const cli = await this.prisma.cliente.findUnique({
-      where: { id: clienteId },
-      select: { nroCliente: true },
-    });
-    if (cli && cli.nroCliente.trim() !== (lote.nroCliente ?? '').trim()) {
-      throw new BadRequestException(
-        `El lote ${loteCodigo} es del cliente ${lote.nroCliente || '—'}, no de esta devolución`,
-      );
-    }
-    return loteCodigo;
-  }
-
-  /**
-   * Asigna el lote del ERP a una devolución ANTES del cierre (para el chequeo
-   * periódico de validación). Solo en estados declarados-y-sin-procesar. Resetea
-   * la firma de validación para que el cron vuelva a evaluar/avisar.
-   */
-  async asignarLote(actor: JwtPayload, id: number, loteCodigo: string) {
-    const a = await this.obtenerOr404(id);
-    const permitidos: DevEstado[] = [
-      DevEstado.EN_TRANSITO,
-      DevEstado.ENTREGADO,
-      DevEstado.INGRESO_DEPOSITO,
-    ];
-    if (!permitidos.includes(a.estado)) {
-      throw new BadRequestException(
-        'El lote se asigna a una devolución despachada y sin procesar',
-      );
-    }
-    const codigo = await this.validarLoteDeCliente(loteCodigo, a.clienteId);
-    // Reasignar el MISMO lote no resetea la firma: evita un re-aviso sin cambios.
-    const cambioLote = a.loteCodigo !== codigo;
-    await this.prisma.devAutorizacion.update({
-      where: { id },
-      data: { loteCodigo: codigo, ...(cambioLote ? { loteValidacionFirma: null } : {}) },
-    });
-    await this.auditoria.registrar({
-      actorId: actor.sub,
-      actorTipo: actor.tipo,
-      accion: 'asignar_lote',
-      entidad: 'dev_autorizacion',
-      entidadId: String(id),
-      detalle: { loteCodigo: codigo },
-    });
-    return this.detalle(id);
-  }
-
-  /** Firma estable de una reconciliación (para deduplicar el aviso del cron). */
-  private firmaReconciliacion(rec: ReconciliacionLinea[]): string {
-    const base = rec
-      .map((l) => `${l.isbn}:${l.declarado}:${l.cantidadFierro ?? ''}`)
-      .join('|');
-    return createHash('sha256').update(base).digest('hex').slice(0, 64);
-  }
-
-  /**
-   * Chequeo periódico (lo dispara el cron): por cada devolución declarada y sin
-   * procesar que tenga lote asignado, reconcilia declarado vs lote del ERP y, si
-   * la comparación CAMBIÓ desde el último aviso, emite devolucion.lote_evaluado
-   * (lo consume Notificaciones) y guarda la nueva firma. Nunca lanza por una
-   * devolución: un fallo aislado no frena el resto del lote.
-   */
-  async evaluarLotesPendientes(): Promise<{ evaluadas: number; notificadas: number }> {
-    // Anti-solape: si una corrida previa sigue procesando, salir (evita duplicar
-    // mails cuando un lote tarda más que el intervalo del cron).
-    if (this.evaluandoLotes) return { evaluadas: 0, notificadas: 0 };
+  async evaluarLotesPendientes(): Promise<{
+    revisadas: number;
+    procesadas: number;
+    conDiferencias: number;
+  }> {
+    if (this.evaluandoLotes) return { revisadas: 0, procesadas: 0, conDiferencias: 0 };
     this.evaluandoLotes = true;
     try {
-      const pendientes = await this.prisma.devAutorizacion.findMany({
-        where: {
-          estado: {
-            in: [DevEstado.EN_TRANSITO, DevEstado.ENTREGADO, DevEstado.INGRESO_DEPOSITO],
-          },
-          loteCodigo: { not: null },
-        },
-        select: { id: true, clienteId: true, loteCodigo: true, loteValidacionFirma: true },
+      const enValidacion = await this.prisma.devAutorizacion.findMany({
+        where: { estado: DevEstado.VALIDANDO },
       });
-      let notificadas = 0;
-      for (const a of pendientes) {
+      let procesadas = 0;
+      let conDiferencias = 0;
+      for (const a of enValidacion) {
         try {
-          const reconciliacion = await this.calcularReconciliacion(a.id, a.loteCodigo);
-          const firma = this.firmaReconciliacion(reconciliacion);
-          if (firma === a.loteValidacionFirma) continue; // sin cambios → no re-avisa
-          const hayDiferencias = reconciliacion.some((l) => this.esLineaConDiferencia(l));
-          // Persistir la firma ANTES de emitir: junto con el guard, una corrida
-          // solapada ya ve el nuevo valor y no re-emite el mismo aviso.
-          await this.prisma.devAutorizacion.update({
-            where: { id: a.id },
-            data: { loteValidacionFirma: firma },
+          if (!a.loteCodigo) continue;
+          const lote = await this.prisma.devLote.findUnique({ where: { codigo: a.loteCodigo } });
+          if (!lote) continue; // el lote aún no llegó de Fierro → sigue validando
+          const cli = await this.prisma.cliente.findUnique({
+            where: { id: a.clienteId },
+            select: { nroCliente: true },
           });
-          const ev: DevolucionLoteEvaluadoEvent = {
-            autorizacionId: a.id,
-            clienteId: a.clienteId,
-            loteCodigo: a.loteCodigo!,
-            reconciliacion,
-            hayDiferencias,
-            ts: new Date().toISOString(),
-          };
-          this.eventos.emit(DEVOLUCION_LOTE_EVALUADO, ev);
-          notificadas++;
+          // No se saltea con nroCliente vacío: en ese caso no se puede confirmar
+          // pertenencia → sigue en VALIDANDO (el operario debe corregir el lote).
+          if (cli && cli.nroCliente.trim() !== (lote.nroCliente ?? '').trim()) {
+            this.logger.warn(
+              `Devolución ${a.id}: el lote ${a.loteCodigo} no es del cliente; sigue en validación`,
+            );
+            continue;
+          }
+          const reconciliacion = await this.calcularReconciliacion(a.id, a.loteCodigo);
+          const hayDiferencias = reconciliacion.some((l) => this.esLineaConDiferencia(l));
+          if (hayDiferencias) {
+            await this.transicionar(a.id, SISTEMA, a.estado, DevEstado.CON_DIFERENCIAS);
+            const ev: DevolucionLoteEvaluadoEvent = {
+              autorizacionId: a.id,
+              clienteId: a.clienteId,
+              loteCodigo: a.loteCodigo,
+              reconciliacion,
+              hayDiferencias: true,
+              ts: new Date().toISOString(),
+            };
+            this.eventos.emit(DEVOLUCION_LOTE_EVALUADO, ev);
+            conDiferencias++;
+          } else {
+            await this.procesar(SISTEMA, a, reconciliacion);
+            procesadas++;
+          }
         } catch (err) {
           this.logger.warn(
-            `Evaluación de lote falló para la devolución ${a.id}: ${(err as Error).message}`,
+            `Validación falló para la devolución ${a.id}: ${(err as Error).message}`,
           );
         }
       }
-      return { evaluadas: pendientes.length, notificadas };
+      return { revisadas: enValidacion.length, procesadas, conDiferencias };
     } finally {
       this.evaluandoLotes = false;
     }

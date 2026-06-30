@@ -100,6 +100,15 @@ Módulo `core/notificaciones`: envía mails en cada **cambio de estado** de una 
 - **Outbox/reintento:** `core_notificacion_log` registra cada envío (PENDIENTE/ENVIADO/ERROR, cuerpo renderizado). Cron cada 5 min reintenta ERROR/PENDIENTE con `intentos<5`, con **guarda anti-solape** y **ventana de 2 min** (no pisa el envío inline en vuelo → evita duplicados).
 - **Migración:** `20260625120000_core_notificaciones`. **Pendiente de deploy** (corre con `prisma migrate deploy`).
 
+## Máquina de estados reformulada (cola del circuito) — 2026-06-30
+
+`… → ENTREGADO → En proceso de devolución (pesar bultos) → Procesando (ingresar nº lote Fierro) → Validando (cron compara declarado vs Fierro) → Procesado (auto si coincide) | Con diferencias (responsable confirma con observación) → Procesado`.
+
+- Se **eliminó "Ingreso a depósito"** (rename a "En proceso de devolución") y el paso de **ubicación de espera**. El control = solo **pesar cada bulto**.
+- **Procesando** solo pide el **nº de lote de Fierro** (puede no haber llegado aún por la API). **Validando** espera al lote y compara: sin diferencias → Procesado (automático, cron); con diferencias → **Con diferencias**, donde un responsable (permiso **`devolucion.validar`**) revisa, observa y confirma.
+- Transiciones: `iniciarProceso`, `terminarPesaje`, `ingresarLote` (Procesando→Validando o corrige en Validando), `confirmarConDiferencias`. El cron `evaluarLotesPendientes` scanea VALIDANDO y transiciona con actor "sistema". Se fue `cerrar`/`asignarLote`/`ingreso`.
+- **Migración enum** `20260630130000_dev_estados_proceso` (expand→update filas→shrink). Requiere `db push` local + `migrate deploy` en prod.
+
 ## Reformulación de control + reconciliación por lote del ERP — 2026-06-30
 
 Cambio de fondo en el cierre de devoluciones (decidido con el usuario):

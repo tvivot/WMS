@@ -19,13 +19,13 @@ export class LoteScheduler {
   async evaluar(): Promise<void> {
     try {
       const r = await this.svc.evaluarLotesPendientes();
-      if (r.notificadas > 0) {
+      if (r.procesadas > 0 || r.conDiferencias > 0) {
         this.logger.log(
-          `Chequeo de lotes: ${r.notificadas}/${r.evaluadas} devoluciones con cambios notificadas`,
+          `Validación de lotes: ${r.procesadas} procesadas, ${r.conDiferencias} con diferencias (de ${r.revisadas} en validación)`,
         );
       }
     } catch (err) {
-      this.logger.error(`Chequeo de lotes falló: ${(err as Error).message}`);
+      this.logger.error(`Validación de lotes falló: ${(err as Error).message}`);
     }
   }
 }

@@ -21,13 +21,13 @@ import type { JwtPayload } from '../../core/auth/jwt-payload';
 import { AutorizacionService, type ArchivoImportado } from './autorizacion.service';
 import {
   AsignarLoteDto,
-  CerrarDto,
+  ConfirmarDto,
   ControlarBultoDto,
   CorregirControlDto,
   CrearAutorizacionDto,
   DeclararDto,
   ImportarDeclaracionDto,
-  IngresoDto,
+  TerminarPesajeDto,
   RecibirDto,
   ResolverExcepcionDto,
   SolicitarExcepcionDto,
@@ -177,25 +177,11 @@ export class AutorizacionController {
     return this.svc.recibir(actor, id, dto);
   }
 
+  /** Entregado → En proceso de devolución: arranca el pesaje. */
   @RequierePermiso(PERMISOS.DEPOSITO_INGRESAR)
-  @Patch(':id/ingreso')
-  ingreso(
-    @Actor() actor: JwtPayload,
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: IngresoDto,
-  ) {
-    return this.svc.ingreso(actor, id, dto);
-  }
-
-  /** Asigna el lote del ERP a la devolución antes del cierre (validación periódica). */
-  @RequierePermiso(PERMISOS.DEPOSITO_INGRESAR)
-  @Patch(':id/lote')
-  asignarLote(
-    @Actor() actor: JwtPayload,
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: AsignarLoteDto,
-  ) {
-    return this.svc.asignarLote(actor, id, dto.loteCodigo);
+  @Patch(':id/iniciar')
+  iniciarProceso(@Actor() actor: JwtPayload, @Param('id', ParseIntPipe) id: number) {
+    return this.svc.iniciarProceso(actor, id);
   }
 
   @RequierePermiso(PERMISOS.DEPOSITO_CONTROLAR)
@@ -209,14 +195,37 @@ export class AutorizacionController {
     return this.svc.controlarBulto(actor, id, numero, dto);
   }
 
+  /** En proceso de devolución → Procesando: termina el pesaje. */
   @RequierePermiso(PERMISOS.DEPOSITO_CONTROLAR)
-  @Patch(':id/cierre')
-  cerrar(
+  @Patch(':id/terminar-pesaje')
+  terminarPesaje(
     @Actor() actor: JwtPayload,
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: CerrarDto,
+    @Body() dto: TerminarPesajeDto,
   ) {
-    return this.svc.cerrar(actor, id, dto);
+    return this.svc.terminarPesaje(actor, id, dto);
+  }
+
+  /** Ingresa/corrige el nº de lote del ERP (Procesando/Validando/Con diferencias). */
+  @RequierePermiso(PERMISOS.DEPOSITO_CONTROLAR, PERMISOS.DEVOLUCION_VALIDAR)
+  @Patch(':id/lote')
+  ingresarLote(
+    @Actor() actor: JwtPayload,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: AsignarLoteDto,
+  ) {
+    return this.svc.ingresarLote(actor, id, dto);
+  }
+
+  /** Con diferencias → Procesado: el responsable revisa y confirma (permiso devolucion.validar). */
+  @RequierePermiso(PERMISOS.DEVOLUCION_VALIDAR)
+  @Patch(':id/confirmar')
+  confirmar(
+    @Actor() actor: JwtPayload,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ConfirmarDto,
+  ) {
+    return this.svc.confirmarConDiferencias(actor, id, dto);
   }
 
   /** Corrección post-Procesado: solo quien tenga devolucion.corregir (Admin por defecto). */

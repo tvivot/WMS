@@ -18,6 +18,9 @@ export enum EstadoDevolucion {
   APROBADO = 'Aprobado',
   EN_TRANSITO = 'En tránsito',
   ENTREGADO = 'Entregado',
-  INGRESO_DEPOSITO = 'Ingreso a depósito',
+  EN_PROCESO_DEVOLUCION = 'En proceso de devolución',
+  PROCESANDO = 'Procesando',
+  VALIDANDO = 'Validando',
+  CON_DIFERENCIAS = 'Con diferencias',
   PROCESADO = 'Procesado',
 }

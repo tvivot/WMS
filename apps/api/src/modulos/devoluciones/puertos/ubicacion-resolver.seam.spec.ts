@@ -10,12 +10,11 @@ import type {
 /**
  * Test del SEAM (criterio del CLAUDE.md): se reemplaza el UbicacionResolverPort
  * por una implementación FALSA que simula el módulo Ubicaciones (valida por
- * tipo), SIN tocar Devoluciones. Prueba que Devoluciones delega en el puerto.
+ * tipo), SIN tocar Devoluciones. El seam se ejercita por los destinos del cierre
+ * (buenos → picking/pallet, malos → dañados/cuarentena), validados vía el puerto.
  */
 class FakeUbicacionesAdapter implements UbicacionResolverPort {
-  // Simula un mapa real de Ubicaciones por tipo.
   private readonly mapa: Record<string, TipoUbicacion[]> = {
-    'DEV-01': ['devoluciones', 'staging'],
     'A-01': ['picking'],
     'DAN-01': ['dañados'],
   };
@@ -32,42 +31,67 @@ function actor(): JwtPayload {
 }
 
 describe('Seam UbicacionResolverPort en Devoluciones', () => {
-  let prisma: { devAutorizacion: { findUnique: jest.Mock; update: jest.Mock } };
+  let prisma: any;
   let svc: AutorizacionService;
 
   beforeEach(() => {
+    const base = {
+      id: 1,
+      estado: DevEstado.CON_DIFERENCIAS,
+      clienteId: 1,
+      depositoId: 1,
+      observaciones: null,
+      loteCodigo: null,
+      motivoId: null,
+      transportistaId: null,
+      creadoPorId: 1,
+      creadoPorTipo: 'usuario',
+    };
     prisma = {
       devAutorizacion: {
-        findUnique: jest.fn().mockResolvedValue({
-          id: 1,
-          estado: DevEstado.ENTREGADO,
-          clienteId: 1,
-        }),
-        update: jest.fn().mockImplementation(({ data }) =>
-          Promise.resolve({ id: 1, estado: DevEstado.INGRESO_DEPOSITO, ...data }),
+        findUnique: jest.fn().mockImplementation(({ include }: any) =>
+          Promise.resolve(
+            include ? { ...base, declaraciones: [], bultos: [], excepciones: [] } : base,
+          ),
+        ),
+        update: jest.fn().mockImplementation(({ data }: any) =>
+          Promise.resolve({ ...base, estado: DevEstado.PROCESADO, ...data }),
         ),
       },
+      devDeclaracion: { findMany: jest.fn().mockResolvedValue([]) },
+      devLote: { findUnique: jest.fn().mockResolvedValue(null) },
+      cliente: { findUnique: jest.fn().mockResolvedValue({ id: 1, nroCliente: 'C-1', nombre: 'X' }) },
+      transportista: { findUnique: jest.fn() },
+      motivo: { findUnique: jest.fn() },
+      usuario: { findUnique: jest.fn().mockResolvedValue({ nombre: 'Dep', username: 'dep' }) },
+      producto: { findMany: jest.fn().mockResolvedValue([]) },
     };
     svc = new AutorizacionService(
       prisma as never,
-      {} as never, // catalogo (no usado en ingreso)
+      {} as never, // catalogo (no usado acá)
       { registrar: jest.fn() } as never, // auditoria
       { emit: jest.fn() } as never, // eventos
       new FakeUbicacionesAdapter(), // ← puerto FALSO de Ubicaciones
-      { cargarSaldos: jest.fn(), saldosDe: jest.fn() } as never, // consignación (no usado en ingreso)
+      { cargarSaldos: jest.fn(), saldosDe: jest.fn() } as never, // consignación
     );
   });
 
-  it('acepta una ubicación válida para "devoluciones" según el puerto', async () => {
-    const r = await svc.ingreso(actor(), 1, { ubicacionEspera: 'DEV-01' });
-    expect(r.estado).toBe(DevEstado.INGRESO_DEPOSITO);
+  it('acepta un destino válido para "picking" según el puerto', async () => {
+    const r = await svc.confirmarConDiferencias(actor(), 1, {
+      observaciones: 'revisado',
+      ubicacionDestinoBueno: 'A-01',
+    });
+    expect(r.autorizacion.estado).toBe(DevEstado.PROCESADO);
     expect(prisma.devAutorizacion.update).toHaveBeenCalled();
   });
 
-  it('rechaza una ubicación NO válida para "devoluciones" (delegó en el puerto)', async () => {
-    // 'A-01' es de tipo picking, no devoluciones → el puerto la rechaza.
+  it('rechaza un destino NO válido para "picking" (delegó en el puerto)', async () => {
+    // 'DAN-01' es de tipo dañados, no picking → el puerto la rechaza.
     await expect(
-      svc.ingreso(actor(), 1, { ubicacionEspera: 'A-01' }),
+      svc.confirmarConDiferencias(actor(), 1, {
+        observaciones: 'revisado',
+        ubicacionDestinoBueno: 'DAN-01',
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma.devAutorizacion.update).not.toHaveBeenCalled();
   });

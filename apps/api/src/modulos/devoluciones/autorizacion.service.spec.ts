@@ -395,16 +395,18 @@ async function avanzarHasta(ctx: ReturnType<typeof crearServicio>, hasta: DevEst
   if (hasta === DevEstado.EN_TRANSITO) return a.id;
   await svc.recibir(deposito, a.id, { bultosRecibidos: 2 });
   if (hasta === DevEstado.ENTREGADO) return a.id;
-  await svc.ingreso(deposito, a.id, { ubicacionEspera: 'DEV-01' });
-  if (hasta === DevEstado.INGRESO_DEPOSITO) return a.id;
-  // Control = pesar cada bulto (6 + 4 = 10) y marcarlo controlado.
+  await svc.iniciarProceso(deposito, a.id);
+  if (hasta === DevEstado.EN_PROCESO_DEVOLUCION) return a.id;
+  // Pesar cada bulto (6 + 4 = 10) y terminar el pesaje → Procesando.
   await svc.controlarBulto(deposito, a.id, 1, { peso: 6 });
   await svc.controlarBulto(deposito, a.id, 2, { peso: 4 });
-  await svc.cerrar(deposito, a.id, {
-    loteCodigo: 'RL-1',
-    ubicacionDestinoBueno: 'A-01',
-    ubicacionDestinoMalo: 'DAN-01',
-  });
+  await svc.terminarPesaje(deposito, a.id, {});
+  if (hasta === DevEstado.PROCESANDO) return a.id;
+  // Ingresar el nº de lote → Validando.
+  await svc.ingresarLote(deposito, a.id, { loteCodigo: 'RL-1' });
+  if (hasta === DevEstado.VALIDANDO) return a.id;
+  // Validación automática (cron): RL-1 matchea lo declarado → Procesado.
+  await svc.evaluarLotesPendientes();
   return a.id;
 }
 
@@ -617,76 +619,75 @@ describe('AutorizacionService — máquina de estados', () => {
     expect(a.bultosRecibidos).toBe(3);
   });
 
-  it('no permite cerrar con bultos sin controlar', async () => {
+  it('no permite terminar el pesaje con bultos sin pesar', async () => {
     const ctx = crearServicio();
-    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
-    await ctx.svc.controlarBulto(deposito, id, 1, { peso: 6 });
-    await expect(
-      ctx.svc.cerrar(deposito, id, { loteCodigo: 'RL-1', ubicacionDestinoBueno: 'A-01' }),
-    ).rejects.toThrow(/sin controlar/);
+    const id = await avanzarHasta(ctx, DevEstado.EN_PROCESO_DEVOLUCION);
+    await ctx.svc.controlarBulto(deposito, id, 1, { peso: 6 }); // falta el 2
+    await expect(ctx.svc.terminarPesaje(deposito, id, {})).rejects.toThrow(/sin pesar/);
   });
 
-  it('exige el lote del ERP para cerrar y valida que exista', async () => {
+  it('pesa, ingresa lote y la validación automática procesa cuando coincide', async () => {
     const ctx = crearServicio();
-    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
+    const id = await avanzarHasta(ctx, DevEstado.EN_PROCESO_DEVOLUCION);
     await ctx.svc.controlarBulto(deposito, id, 1, { peso: 6 });
     await ctx.svc.controlarBulto(deposito, id, 2, { peso: 4 });
-    // Lote inexistente → rechaza.
-    await expect(
-      ctx.svc.cerrar(deposito, id, { loteCodigo: 'NO-EXISTE' }),
-    ).rejects.toThrow(/no encontrado/);
-    // Lote válido → procesa y guarda el código.
-    const r = await ctx.svc.cerrar(deposito, id, { loteCodigo: 'RL-1' });
-    expect(r.autorizacion.estado).toBe(DevEstado.PROCESADO);
-    expect(r.autorizacion.loteCodigo).toBe('RL-1');
+    await ctx.svc.terminarPesaje(deposito, id, {});
+    const v = await ctx.svc.ingresarLote(deposito, id, { loteCodigo: 'RL-1' });
+    expect(v.estado).toBe(DevEstado.VALIDANDO);
+    expect(v.loteCodigo).toBe('RL-1');
+    await ctx.svc.evaluarLotesPendientes(); // RL-1 coincide → Procesado
+    expect((await ctx.svc.detalle(id)).estado).toBe(DevEstado.PROCESADO);
   });
 
-  it('las ubicaciones son informativas: se ingresa y se procesa sin cargarlas', async () => {
+  it('iniciar proceso no pide ubicación; el camino feliz llega a Procesado sin destinos', async () => {
     const ctx = crearServicio();
     const id = await avanzarHasta(ctx, DevEstado.ENTREGADO);
-    // Ingreso SIN ubicación de espera.
-    const ing = await ctx.svc.ingreso(deposito, id, {});
-    expect(ing.estado).toBe(DevEstado.INGRESO_DEPOSITO);
-    expect(ing.ubicacionEspera).toBeNull();
-    await ctx.svc.controlarBulto(deposito, id, 1, { peso: 6 });
-    await ctx.svc.controlarBulto(deposito, id, 2, { peso: 4 });
-    // Cierre SIN ubicaciones destino (pero CON lote, que es obligatorio).
-    const r = await ctx.svc.cerrar(deposito, id, { loteCodigo: 'RL-1' });
-    expect(r.autorizacion.estado).toBe(DevEstado.PROCESADO);
-    expect(r.autorizacion.ubicacionDestinoBueno).toBeNull();
-    expect(r.autorizacion.ubicacionDestinoMalo).toBeNull();
+    const ip = await ctx.svc.iniciarProceso(deposito, id);
+    expect(ip.estado).toBe(DevEstado.EN_PROCESO_DEVOLUCION);
+    const procId = await avanzarHasta(ctx, DevEstado.PROCESADO);
+    const det = await ctx.svc.detalle(procId);
+    expect(det.estado).toBe(DevEstado.PROCESADO);
+    expect(det.ubicacionDestinoBueno).toBeNull();
+    expect(det.ubicacionDestinoMalo).toBeNull();
   });
 
-  it('una ubicación cargada se guarda (recortada); en blanco queda null', async () => {
+  it('con diferencias: el responsable confirma con observación (y destinos) → Procesado', async () => {
     const ctx = crearServicio();
-    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
-    await ctx.svc.controlarBulto(deposito, id, 1, { peso: 6 });
-    await ctx.svc.controlarBulto(deposito, id, 2, { peso: 4 });
-    // Buenos: se carga (con espacios → se recorta). Malos: en blanco → null.
-    const r = await ctx.svc.cerrar(deposito, id, {
-      loteCodigo: 'RL-1',
+    const id = await avanzarHasta(ctx, DevEstado.PROCESANDO);
+    // Lote que NO coincide (le falta ISBN_C) → CON_DIFERENCIAS.
+    ctx.db.lotes.push({
+      id: 410,
+      codigo: 'RL-DIF',
+      nroCliente: 'C-10',
+      items: [
+        { isbn: ISBN_A, cantidad: 2, titulo: 'Libro A' },
+        { isbn: ISBN_B, cantidad: 3, titulo: 'Libro B' },
+      ],
+    } as never);
+    await ctx.svc.ingresarLote(deposito, id, { loteCodigo: 'RL-DIF' });
+    await ctx.svc.evaluarLotesPendientes();
+    expect((await ctx.svc.detalle(id)).estado).toBe(DevEstado.CON_DIFERENCIAS);
+    // Sin observación no confirma.
+    await expect(
+      ctx.svc.confirmarConDiferencias(admin, id, { observaciones: '   ' }),
+    ).rejects.toThrow(/observación/);
+    const r = await ctx.svc.confirmarConDiferencias(admin, id, {
+      observaciones: 'controlado: falta C',
       ubicacionDestinoBueno: '  A-01  ',
-      ubicacionDestinoMalo: '   ',
     });
+    expect(r.autorizacion.estado).toBe(DevEstado.PROCESADO);
     expect(r.autorizacion.ubicacionDestinoBueno).toBe('A-01');
-    expect(r.autorizacion.ubicacionDestinoMalo).toBeNull();
   });
 
-  it('diferencia de peso exige observación PROPIA del cierre (una previa no alcanza)', async () => {
+  it('diferencia de peso al terminar el pesaje exige observación', async () => {
     const ctx = crearServicio();
     const id = await avanzarHasta(ctx, DevEstado.EN_TRANSITO);
-    // Recepción con observación previa (bultos difieren).
     await ctx.svc.recibir(deposito, id, { bultosRecibidos: 1, observaciones: 'faltó un bulto' });
-    await ctx.svc.ingreso(deposito, id, { ubicacionEspera: 'DEV-01' });
+    await ctx.svc.iniciarProceso(deposito, id);
     await ctx.svc.controlarBulto(deposito, id, 1, { peso: 7 }); // declarado: 10
-    await expect(
-      ctx.svc.cerrar(deposito, id, { loteCodigo: 'RL-1' }),
-    ).rejects.toThrow(/observación obligatoria/);
-    const r = await ctx.svc.cerrar(deposito, id, {
-      loteCodigo: 'RL-1',
-      observaciones: 'peso menor: faltó un bulto',
-    });
-    expect(r.autorizacion.estado).toBe(DevEstado.PROCESADO);
+    await expect(ctx.svc.terminarPesaje(deposito, id, {})).rejects.toThrow(/observación obligatoria/);
+    const det = await ctx.svc.terminarPesaje(deposito, id, { observaciones: 'peso menor: faltó un bulto' });
+    expect(det.estado).toBe(DevEstado.PROCESANDO);
   });
 });
 
@@ -732,26 +733,22 @@ describe('AutorizacionService — propiedad del cliente', () => {
 });
 
 describe('AutorizacionService — circuito completo (criterio de validación)', () => {
-  it('Vendedor crea → aprueba → cliente declara 3 ISBN/2 bultos/10kg → despacha → recibe 2 (6+4=10) → ingresa DEV-01 → controla (1 mal estado) → Procesado', async () => {
+  it('crea → aprueba → declara/despacha → recibe → pesa → ingresa lote → valida (coincide) → Procesado', async () => {
     const ctx = crearServicio();
     const id = await avanzarHasta(ctx, DevEstado.PROCESADO);
 
     const detalle = await ctx.svc.detalle(id);
     expect(detalle.estado).toBe(DevEstado.PROCESADO);
-    expect(detalle.ubicacionEspera).toBe('DEV-01');
-    expect(detalle.ubicacionDestinoBueno).toBe('A-01');
-    expect(detalle.ubicacionDestinoMalo).toBe('DAN-01');
+    expect(detalle.loteCodigo).toBe('RL-1');
     expect(detalle.transportista?.nombre).toBe('Trans OK');
     expect(detalle.cliente?.nombre).toBe('Cliente X');
-    // Títulos resueltos desde el catálogo en el detalle.
     expect(detalle.declaraciones.map((d) => d.titulo).sort()).toEqual([
       'Libro A',
       'Libro B',
       'Libro C',
     ]);
 
-    // Reconciliación por ISBN: declarado (WMS) vs lote del ERP (Fierro). El lote
-    // RL-1 matchea lo declarado → diferencia 0. Orden por ISBN ascendente (C<A<B).
+    // Reconciliación: declarado (WMS) vs lote del ERP (Fierro). RL-1 coincide → 0.
     const rec = await ctx.svc.calcularReconciliacion(id, 'RL-1');
     expect(rec).toEqual([
       { isbn: ISBN_C, productoId: 3, titulo: 'Libro C', declarado: 5, cantidadFierro: 5, diferencia: 0 },
@@ -759,23 +756,23 @@ describe('AutorizacionService — circuito completo (criterio de validación)', 
       { isbn: ISBN_B, productoId: 2, titulo: 'Libro B', declarado: 3, cantidadFierro: 3, diferencia: 0 },
     ]);
 
-    // Eventos: 5 transiciones + devolucion.procesada con la reconciliación.
+    // 7 transiciones (la última, a Procesado, la dispara el sistema/cron).
     const cambios = ctx.eventos.emitidos.filter(([n]) => n === DEVOLUCION_ESTADO_CAMBIADO);
     expect(cambios.map(([, e]) => e.estadoNuevo)).toEqual([
       DevEstado.APROBADO,
       DevEstado.EN_TRANSITO,
       DevEstado.ENTREGADO,
-      DevEstado.INGRESO_DEPOSITO,
+      DevEstado.EN_PROCESO_DEVOLUCION,
+      DevEstado.PROCESANDO,
+      DevEstado.VALIDANDO,
       DevEstado.PROCESADO,
     ]);
     const procesada = ctx.eventos.emitidos.filter(([n]) => n === DEVOLUCION_PROCESADA);
     expect(procesada).toHaveLength(1);
     expect(procesada[0][1].reconciliacion).toHaveLength(3);
-    expect(procesada[0][1].ubicacionDestinoBueno).toBe('A-01');
 
-    // Auditoría: creación + 5 cambios de estado + 2 controles de bulto.
     const acciones = ctx.auditoria.registros.map((r) => r.accion);
-    expect(acciones.filter((a) => a === 'cambio_estado')).toHaveLength(5);
+    expect(acciones.filter((a) => a === 'cambio_estado')).toHaveLength(7);
     expect(acciones.filter((a) => a === 'controlar_bulto')).toHaveLength(2);
     expect(acciones).toContain('crear');
   });
@@ -784,7 +781,7 @@ describe('AutorizacionService — circuito completo (criterio de validación)', 
 describe('AutorizacionService — corrección post-Procesado', () => {
   it('solo opera sobre devoluciones Procesadas', async () => {
     const ctx = crearServicio();
-    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
+    const id = await avanzarHasta(ctx, DevEstado.EN_PROCESO_DEVOLUCION);
     await expect(
       ctx.svc.corregirControl(admin, id, 1, { peso: 5 }),
     ).rejects.toThrow(/Transición inválida/);
@@ -818,7 +815,7 @@ describe('AutorizacionService — corrección post-Procesado', () => {
 describe('AutorizacionService — reconciliación contra el lote del ERP', () => {
   it('marca faltante/sobrante por ISBN comparando declarado vs lote Fierro', async () => {
     const ctx = crearServicio();
-    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
+    const id = await avanzarHasta(ctx, DevEstado.EN_PROCESO_DEVOLUCION);
     // Lote del ERP con cantidades distintas a lo declarado (A=2,B=3,C=5):
     // A: Fierro 2 → diferencia 0; B: Fierro 5 → faltante (declaró 3, -2);
     // C: ausente del lote → cantidadFierro null, diferencia null.
@@ -843,74 +840,55 @@ describe('AutorizacionService — reconciliación contra el lote del ERP', () =>
 
   it('sin lote (todavía no cerrada), la reconciliación muestra solo lo declarado', async () => {
     const ctx = crearServicio();
-    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
+    const id = await avanzarHasta(ctx, DevEstado.EN_PROCESO_DEVOLUCION);
     const rec = await ctx.svc.calcularReconciliacion(id, null);
     expect(rec.every((l) => l.cantidadFierro === null && l.diferencia === null)).toBe(true);
     expect(rec.find((l) => l.isbn === ISBN_A)!.declarado).toBe(2);
   });
 
-  it('rechaza cerrar con un lote de otro cliente', async () => {
+  it('en validación, un lote de otro cliente queda esperando (no procesa)', async () => {
     const ctx = crearServicio();
-    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
-    await ctx.svc.controlarBulto(deposito, id, 1, { peso: 6 });
-    await ctx.svc.controlarBulto(deposito, id, 2, { peso: 4 });
+    const id = await avanzarHasta(ctx, DevEstado.PROCESANDO);
     ctx.db.lotes.push({ id: 300, codigo: 'RL-AJENO', nroCliente: 'C-11', items: [] } as never);
-    await expect(
-      ctx.svc.cerrar(deposito, id, { loteCodigo: 'RL-AJENO' }),
-    ).rejects.toThrow(/es del cliente/);
+    await ctx.svc.ingresarLote(deposito, id, { loteCodigo: 'RL-AJENO' });
+    await ctx.svc.evaluarLotesPendientes();
+    expect((await ctx.svc.detalle(id)).estado).toBe(DevEstado.VALIDANDO);
   });
 });
 
-describe('AutorizacionService — asignación de lote + chequeo periódico', () => {
-  it('asignarLote: solo en estados despachado-sin-procesar y valida el lote', async () => {
+describe('AutorizacionService — validación periódica de lotes', () => {
+  it('ingresarLote: solo en Procesando (→ Validando) o corrige en Validando', async () => {
     const ctx = crearServicio();
-    const aprob = await avanzarHasta(ctx, DevEstado.APROBADO);
-    await expect(ctx.svc.asignarLote(deposito, aprob, 'RL-1')).rejects.toThrow(/despachada/);
-    const id = await avanzarHasta(ctx, DevEstado.ENTREGADO);
-    const det = await ctx.svc.asignarLote(deposito, id, 'RL-1');
-    expect(det.loteCodigo).toBe('RL-1');
-    await expect(ctx.svc.asignarLote(deposito, id, 'NO-EXISTE')).rejects.toThrow(/no encontrado/);
+    const ent = await avanzarHasta(ctx, DevEstado.ENTREGADO);
+    await expect(ctx.svc.ingresarLote(deposito, ent, { loteCodigo: 'RL-1' })).rejects.toThrow(/Procesando/);
+    const id = await avanzarHasta(ctx, DevEstado.PROCESANDO);
+    const v = await ctx.svc.ingresarLote(deposito, id, { loteCodigo: 'RL-1' });
+    expect(v.estado).toBe(DevEstado.VALIDANDO);
+    const v2 = await ctx.svc.ingresarLote(deposito, id, { loteCodigo: 'RL-1' }); // corrige
+    expect(v2.estado).toBe(DevEstado.VALIDANDO);
   });
 
-  it('cierra usando el lote ya asignado si no se pasa en el cierre', async () => {
+  it('el lote que aún no llegó de Fierro deja la devolución en Validando', async () => {
     const ctx = crearServicio();
-    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
-    await ctx.svc.asignarLote(deposito, id, 'RL-1');
-    await ctx.svc.controlarBulto(deposito, id, 1, { peso: 6 });
-    await ctx.svc.controlarBulto(deposito, id, 2, { peso: 4 });
-    const r = await ctx.svc.cerrar(deposito, id, {}); // sin loteCodigo en el DTO
-    expect(r.autorizacion.estado).toBe(DevEstado.PROCESADO);
-    expect(r.autorizacion.loteCodigo).toBe('RL-1');
-  });
-
-  it('evaluarLotesPendientes emite devolucion.lote_evaluado solo si la firma cambió', async () => {
-    const ctx = crearServicio();
-    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
-    await ctx.svc.asignarLote(deposito, id, 'RL-1');
-
-    const r1 = await ctx.svc.evaluarLotesPendientes();
-    expect(r1).toMatchObject({ evaluadas: 1, notificadas: 1 });
-    const ev = ctx.eventos.emitidos.filter(([n]) => n === DEVOLUCION_LOTE_EVALUADO);
-    expect(ev).toHaveLength(1);
-    expect(ev[0][1]).toMatchObject({ loteCodigo: 'RL-1', hayDiferencias: false });
-
-    // Segunda corrida sin cambios: no re-emite (dedup por firma).
-    const r2 = await ctx.svc.evaluarLotesPendientes();
-    expect(r2.notificadas).toBe(0);
-    expect(ctx.eventos.emitidos.filter(([n]) => n === DEVOLUCION_LOTE_EVALUADO)).toHaveLength(1);
-  });
-
-  it('no evalúa devoluciones sin lote asignado', async () => {
-    const ctx = crearServicio();
-    await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO); // sin asignar lote
+    const id = await avanzarHasta(ctx, DevEstado.PROCESANDO);
+    await ctx.svc.ingresarLote(deposito, id, { loteCodigo: 'RL-NO-IMPORTADO' });
     const r = await ctx.svc.evaluarLotesPendientes();
-    expect(r.evaluadas).toBe(0);
+    expect(r.procesadas).toBe(0);
+    expect((await ctx.svc.detalle(id)).estado).toBe(DevEstado.VALIDANDO);
   });
 
-  it('hayDiferencias=true si el cliente declaró un ISBN que no está en el lote', async () => {
+  it('sin diferencias → Procesado automático y emite devolucion.procesada', async () => {
     const ctx = crearServicio();
-    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
-    // Lote sin ISBN_C (el cliente declaró 5 de C).
+    const id = await avanzarHasta(ctx, DevEstado.VALIDANDO); // lote RL-1 ya ingresado
+    const r = await ctx.svc.evaluarLotesPendientes();
+    expect(r).toMatchObject({ revisadas: 1, procesadas: 1, conDiferencias: 0 });
+    expect((await ctx.svc.detalle(id)).estado).toBe(DevEstado.PROCESADO);
+    expect(ctx.eventos.emitidos.filter(([n]) => n === DEVOLUCION_PROCESADA)).toHaveLength(1);
+  });
+
+  it('con diferencias → CON_DIFERENCIAS + emite devolucion.lote_evaluado', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.PROCESANDO);
     ctx.db.lotes.push({
       id: 400,
       codigo: 'RL-SINC',
@@ -920,20 +898,37 @@ describe('AutorizacionService — asignación de lote + chequeo periódico', () 
         { isbn: ISBN_B, cantidad: 3, titulo: 'Libro B' },
       ],
     } as never);
-    await ctx.svc.asignarLote(deposito, id, 'RL-SINC');
+    await ctx.svc.ingresarLote(deposito, id, { loteCodigo: 'RL-SINC' });
     const r = await ctx.svc.evaluarLotesPendientes();
-    expect(r.notificadas).toBe(1);
+    expect(r).toMatchObject({ procesadas: 0, conDiferencias: 1 });
+    expect((await ctx.svc.detalle(id)).estado).toBe(DevEstado.CON_DIFERENCIAS);
     const ev = ctx.eventos.emitidos.filter(([n]) => n === DEVOLUCION_LOTE_EVALUADO);
     expect(ev[ev.length - 1][1].hayDiferencias).toBe(true);
   });
 
-  it('reasignar el mismo lote no fuerza un nuevo aviso', async () => {
+  it('en Con diferencias, corregir el lote vuelve a Validando (salida del atasco)', async () => {
     const ctx = crearServicio();
-    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
-    await ctx.svc.asignarLote(deposito, id, 'RL-1');
-    expect((await ctx.svc.evaluarLotesPendientes()).notificadas).toBe(1);
-    await ctx.svc.asignarLote(deposito, id, 'RL-1'); // mismo lote → firma intacta
-    expect((await ctx.svc.evaluarLotesPendientes()).notificadas).toBe(0);
+    const id = await avanzarHasta(ctx, DevEstado.PROCESANDO);
+    ctx.db.lotes.push({
+      id: 420,
+      codigo: 'RL-MAL',
+      nroCliente: 'C-10',
+      items: [{ isbn: ISBN_A, cantidad: 99, titulo: 'Libro A' }],
+    } as never);
+    await ctx.svc.ingresarLote(deposito, id, { loteCodigo: 'RL-MAL' });
+    await ctx.svc.evaluarLotesPendientes();
+    expect((await ctx.svc.detalle(id)).estado).toBe(DevEstado.CON_DIFERENCIAS);
+    const v = await ctx.svc.ingresarLote(admin, id, { loteCodigo: 'RL-1' });
+    expect(v.estado).toBe(DevEstado.VALIDANDO);
+    expect(v.loteCodigo).toBe('RL-1');
+  });
+
+  it('una vez procesada, el cron no la vuelve a tocar', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.PROCESADO);
+    const r = await ctx.svc.evaluarLotesPendientes();
+    expect(r.revisadas).toBe(0); // ya no está en VALIDANDO
+    expect((await ctx.svc.detalle(id)).estado).toBe(DevEstado.PROCESADO);
   });
 });
 
