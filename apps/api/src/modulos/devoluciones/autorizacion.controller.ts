@@ -20,6 +20,7 @@ import { PERMISOS } from '../../core/auth/permisos';
 import type { JwtPayload } from '../../core/auth/jwt-payload';
 import { AutorizacionService, type ArchivoImportado } from './autorizacion.service';
 import {
+  AsignarLoteDto,
   CerrarDto,
   ControlarBultoDto,
   CorregirControlDto,
@@ -184,6 +185,17 @@ export class AutorizacionController {
     @Body() dto: IngresoDto,
   ) {
     return this.svc.ingreso(actor, id, dto);
+  }
+
+  /** Asigna el lote del ERP a la devolución antes del cierre (validación periódica). */
+  @RequierePermiso(PERMISOS.DEPOSITO_INGRESAR)
+  @Patch(':id/lote')
+  asignarLote(
+    @Actor() actor: JwtPayload,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: AsignarLoteDto,
+  ) {
+    return this.svc.asignarLote(actor, id, dto.loteCodigo);
   }
 
   @RequierePermiso(PERMISOS.DEPOSITO_CONTROLAR)

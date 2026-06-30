@@ -10,8 +10,7 @@ import { Scanner } from '../../components/Scanner';
 import type { ProductoLite } from '../../lib/producto';
 
 interface Linea { id: number; isbn: string; cantidad: number; productoId: number | null; titulo: string | null; editorial: string | null; imagenUrl: string | null }
-interface Control { id: number; isbn: string; cantidad: number; malEstado: number; titulo: string | null; editorial: string | null; imagenUrl: string | null }
-interface Bulto { id: number; numero: number; peso: string | null; estadoControl: string; controles: Control[] }
+interface Bulto { id: number; numero: number; peso: string | null; estadoControl: string }
 type ExcepcionEstado = 'PENDIENTE' | 'APROBADA' | 'RECHAZADA';
 interface Excepcion {
   id: number; isbn: string; cantidad: number; estado: ExcepcionEstado;
@@ -27,12 +26,12 @@ interface Detalle {
   motivo: { id: number; nombre: string } | null;
   cantidadUnidades: number | null;
   bultosDeclarados: number | null; pesoTotalDeclarado: string | null; bultosRecibidos: number | null;
+  loteCodigo: string | null;
   ubicacionEspera: string | null; ubicacionDestinoBueno: string | null; ubicacionDestinoMalo: string | null;
   observaciones: string | null; declaraciones: Linea[]; bultos: Bulto[]; excepciones: Excepcion[];
 }
 interface TransportistaOpcion { id: number; nombre: string }
 
-interface FilaControl { isbn: string; titulo: string; editorial: string | null; imagenUrl: string | null; cantidad: number; malEstado: number }
 type ResultadoGuardar = { encolado?: true } | void;
 /** Forma que devuelve /catalogo/productos/por-isbn (resolución de un escaneo). */
 type ProductoResuelto = ProductoLite & { id: number; codigoInterno: string };
@@ -117,6 +116,10 @@ export function DevolucionDetalle() {
 
       {d.estado === 'ENTREGADO' && puede(PERMISOS.DEPOSITO_INGRESAR) && (
         <PanelIngreso onAccion={accion} id={d.id} />
+      )}
+
+      {(d.estado === 'EN_TRANSITO' || d.estado === 'ENTREGADO' || d.estado === 'INGRESO_DEPOSITO') && puede(PERMISOS.DEPOSITO_INGRESAR) && (
+        <PanelLote d={d} onDone={cargar} onError={setError} />
       )}
 
       {d.estado === 'INGRESO_DEPOSITO' && puede(PERMISOS.DEPOSITO_CONTROLAR) && (
@@ -661,16 +664,79 @@ function PanelIngreso({ id, onAccion }: { id: number; onAccion: (fn: () => Promi
   );
 }
 
+/** Asignación del lote del ERP antes del cierre + preview de la comparación. */
+function PanelLote({ d, onDone, onError }: { d: Detalle; onDone: () => void; onError: (s: string) => void }) {
+  const [lote, setLote] = useState(d.loteCodigo ?? '');
+  const [rec, setRec] = useState<LineaRec[] | null>(null);
+  const [guardando, setGuardando] = useState(false);
+
+  const cargarComparacion = useCallback(() => {
+    if (!d.loteCodigo) { setRec(null); return; }
+    api.get<LineaRec[]>(`/devoluciones/autorizaciones/${d.id}/reconciliacion`).then(setRec).catch(() => setRec(null));
+  }, [d.id, d.loteCodigo]);
+  useEffect(cargarComparacion, [cargarComparacion]);
+
+  const asignar = async () => {
+    if (!lote.trim()) { onError('Ingresá el código del lote del ERP.'); return; }
+    setGuardando(true);
+    onError('');
+    try {
+      await api.patch(`/devoluciones/autorizaciones/${d.id}/lote`, { loteCodigo: lote.trim() });
+      onDone();
+    } catch (e) { onError((e as Error).message); }
+    finally { setGuardando(false); }
+  };
+
+  return (
+    <Card>
+      <h2 className="font-semibold mb-1">Lote del ERP (validación)</h2>
+      <p className="text-xs text-slate-400 mb-3">Asigná el lote de Fierro: un chequeo automático cada 15 min compara lo declarado contra el ERP y avisa a los responsables.</p>
+      <div className="flex items-end gap-2">
+        <Field label="Lote de devolución (ERP)"><input className="input w-56" value={lote} onChange={(e) => setLote(e.target.value)} placeholder="Ej: RL-00012345" /></Field>
+        <button className="btn-primary" onClick={asignar} disabled={guardando}>{d.loteCodigo ? 'Actualizar' : 'Asignar'}</button>
+      </div>
+      {d.loteCodigo && rec && rec.length > 0 && (
+        <div className="mt-4 overflow-x-auto">
+          <p className="text-xs text-slate-500 mb-2">Comparación declarado vs ERP:</p>
+          <table className="w-full text-sm">
+            <thead className="text-slate-500 text-left"><tr>
+              <th className="py-1 font-medium">Título</th><th className="font-medium text-right">Declarado</th><th className="font-medium text-right">ERP</th><th className="font-medium text-right">Dif.</th>
+            </tr></thead>
+            <tbody className="divide-y divide-slate-100">
+              {rec.map((r) => {
+                const dif = r.diferencia;
+                const declaradoSinErp = r.cantidadFierro === null && r.declarado > 0;
+                const resalta = (dif !== null && dif !== 0) || declaradoSinErp;
+                return (
+                  <tr key={r.isbn} className={resalta ? 'bg-amber-50' : undefined}>
+                    <td className="py-1 pr-2 max-w-48 truncate">{r.titulo ?? r.isbn}</td>
+                    <td className="text-right tabnum">{r.declarado}</td>
+                    <td className="text-right tabnum">{r.cantidadFierro ?? '—'}</td>
+                    <td className={`text-right tabnum font-semibold ${declaradoSinErp ? 'text-amber-700' : dif === null ? 'text-slate-400' : dif === 0 ? 'text-emerald-700' : 'text-amber-700'}`}>{dif === null ? '—' : dif > 0 ? `+${dif}` : dif}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function PanelControl({ d, onDone, onError }: { d: Detalle; onDone: () => void; onError: (s: string) => void }) {
   const [activo, setActivo] = useState<number | null>(null);
+  const [lote, setLote] = useState(d.loteCodigo ?? '');
   const [destBueno, setDestBueno] = useState('');
   const [destMalo, setDestMalo] = useState('');
   const [obs, setObs] = useState('');
-  const todosControlados = d.bultos.every((b) => b.estadoControl === 'CONTROLADO');
+  const todosControlados = d.bultos.length > 0 && d.bultos.every((b) => b.estadoControl === 'CONTROLADO');
 
   const cerrar = async () => {
+    if (!lote.trim()) { onError('Ingresá el lote de devolución del ERP para cerrar.'); return; }
     try {
       await api.patch(`/devoluciones/autorizaciones/${d.id}/cierre`, {
+        loteCodigo: lote.trim(),
         ubicacionDestinoBueno: destBueno || undefined, ubicacionDestinoMalo: destMalo || undefined, observaciones: obs || undefined,
       });
       onDone();
@@ -681,7 +747,8 @@ function PanelControl({ d, onDone, onError }: { d: Detalle; onDone: () => void; 
 
   return (
     <Card>
-      <h2 className="font-semibold mb-3">Control bulto por bulto</h2>
+      <h2 className="font-semibold mb-1">Control de bultos</h2>
+      <p className="text-xs text-slate-400 mb-3">Pesá cada bulto y marcalo controlado. El conteo de libros se hace en otro proceso.</p>
       <div className="space-y-2">
         {d.bultos.map((b) => (
           <div key={b.id}>
@@ -691,14 +758,13 @@ function PanelControl({ d, onDone, onError }: { d: Detalle; onDone: () => void; 
                 b.estadoControl === 'CONTROLADO' ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-white'
               }`}
             >
-              <span className="font-medium">Bulto {b.numero}</span>
+              <span className="font-medium">Bulto {b.numero}{b.peso ? <span className="ml-2 text-xs text-slate-400 tabnum">{b.peso} kg</span> : null}</span>
               <span className={`text-xs font-semibold ${b.estadoControl === 'CONTROLADO' ? 'text-emerald-700' : 'text-slate-400'}`}>
                 {b.estadoControl === 'CONTROLADO' ? 'Controlado ✓' : 'Pendiente'}
               </span>
             </button>
             {activo === b.numero && (
-              <ControlBulto
-                inicial={b.controles.map((c) => ({ isbn: c.isbn, titulo: c.titulo ?? c.isbn, editorial: c.editorial, imagenUrl: c.imagenUrl, cantidad: c.cantidad, malEstado: c.malEstado }))}
+              <PesarBulto
                 pesoInicial={b.peso ?? ''}
                 etiqueta="Marcar controlado"
                 onGuardar={(payload) => enviarControl(d.id, b.numero, payload)}
@@ -711,14 +777,17 @@ function PanelControl({ d, onDone, onError }: { d: Detalle; onDone: () => void; 
       </div>
 
       <div className="mt-5 pt-5 border-t border-slate-100">
-        <h3 className="font-semibold mb-3">Cierre → destinos</h3>
-        <p className="text-xs text-slate-400 mb-3">Las ubicaciones son informativas: podés cerrar y procesar sin completarlas.</p>
+        <h3 className="font-semibold mb-3">Cierre → reconciliación con el ERP</h3>
+        <Field label="Lote de devolución (ERP) — obligatorio">
+          <input className="input" value={lote} onChange={(e) => setLote(e.target.value)} placeholder="Ej: RL-00012345" />
+        </Field>
+        <p className="text-xs text-slate-400 mt-1 mb-3">Se compara lo declarado por el cliente contra el lote del ERP. El lote tiene que estar importado.</p>
         <div className="grid sm:grid-cols-2 gap-3">
           <Field label="Destino BUENOS (picking/pallet) — opcional"><input className="input" value={destBueno} onChange={(e) => setDestBueno(e.target.value)} placeholder="Ej: A-01" /></Field>
           <Field label="Destino MALOS (dañados/cuarentena) — opcional"><input className="input" value={destMalo} onChange={(e) => setDestMalo(e.target.value)} placeholder="Ej: DAN-01" /></Field>
         </div>
         <Field label="Observación (si peso/bultos difieren)"><input className="input mt-1" value={obs} onChange={(e) => setObs(e.target.value)} /></Field>
-        <button className="btn-accent mt-4 disabled:opacity-50" disabled={!todosControlados} onClick={cerrar}>
+        <button className="btn-accent mt-4 disabled:opacity-50" disabled={!todosControlados || !lote.trim()} onClick={cerrar}>
           Cerrar y procesar
         </button>
         {!todosControlados && <p className="text-xs text-amber-600 mt-2">Faltan bultos por controlar.</p>}
@@ -728,43 +797,29 @@ function PanelControl({ d, onDone, onError }: { d: Detalle; onDone: () => void; 
 }
 
 /**
- * Editor del contenido de un bulto (escaneo + cantidades + mal estado).
- * Reusado por el control normal (outbox offline) y por la corrección
- * post-Procesado (directo a la API): cambia solo `onGuardar`.
+ * Control de un bulto: se PESA y se marca controlado. El conteo de libros por
+ * ISBN se hace en otro proceso. Reusado por el control normal (outbox offline) y
+ * por la corrección post-Procesado (directo a la API): cambia solo `onGuardar`.
  */
-function ControlBulto({ inicial, pesoInicial, etiqueta, onGuardar, onDone, onError }: {
-  inicial?: FilaControl[];
+function PesarBulto({ pesoInicial, etiqueta, onGuardar, onDone, onError }: {
   pesoInicial?: string;
   etiqueta: string;
-  onGuardar: (payload: { peso?: number; controles: { isbn: string; cantidad: number; malEstado: number }[] }) => Promise<ResultadoGuardar>;
+  onGuardar: (payload: { peso: number }) => Promise<ResultadoGuardar>;
   onDone: () => void;
   onError: (s: string) => void;
 }) {
-  const [filas, setFilas] = useState<FilaControl[]>(inicial ?? []);
   const [peso, setPeso] = useState(pesoInicial ?? '');
   const [encolado, setEncolado] = useState(false);
 
-  const sumar = (p: ProductoLite) => {
-    setFilas((prev) => {
-      const i = prev.findIndex((f) => f.isbn === p.isbn);
-      if (i >= 0) { const c = [...prev]; c[i] = { ...c[i], cantidad: c[i].cantidad + 1 }; return c; }
-      return [...prev, { isbn: p.isbn, titulo: p.titulo, editorial: p.editorial, imagenUrl: p.imagenUrl, cantidad: 1, malEstado: 0 }];
-    });
-  };
-
-  const agregar = async (codigo: string) => {
-    try {
-      const p = await api.get<ProductoResuelto>(`/catalogo/productos/por-isbn/${codigo}`);
-      sumar(p);
-    } catch (e) { onError((e as Error).message); }
-  };
-
   const guardar = async () => {
+    // Acepta coma decimal (es-AR): '1,5' → 1.5. Peso obligatorio y > 0.
+    const n = Number(peso.replace(',', '.'));
+    if (!peso.trim() || Number.isNaN(n) || n <= 0) {
+      onError('Ingresá el peso del bulto (kg, mayor a 0).');
+      return;
+    }
     try {
-      const r = await onGuardar({
-        peso: peso ? Number(peso) : undefined,
-        controles: filas.map((f) => ({ isbn: f.isbn, cantidad: f.cantidad, malEstado: f.malEstado })),
-      });
+      const r = await onGuardar({ peso: n });
       if (r && r.encolado) {
         // Sin conexión: quedó guardado localmente y se sincronizará solo.
         setEncolado(true);
@@ -776,20 +831,8 @@ function ControlBulto({ inicial, pesoInicial, etiqueta, onGuardar, onDone, onErr
 
   return (
     <div className="mt-2 p-4 bg-slate-50 rounded-lg space-y-3 animate-fade-in">
-      <Scanner onScan={agregar} onElegir={sumar} placeholder="Escanear contenido del bulto…" />
-      {filas.map((f, i) => (
-        <div key={f.isbn} className="flex items-center gap-2 text-sm">
-          <ProductoThumb producto={f} size={32} />
-          <span className="min-w-0 flex-1 truncate">{f.titulo}</span>
-          <label className="text-xs text-slate-400">cant</label>
-          <input type="number" min={0} value={f.cantidad} onChange={(e) => setFilas((p) => p.map((x, j) => j === i ? { ...x, cantidad: Number(e.target.value) } : x))} className="input w-16 h-9 tabnum text-center" />
-          <label className="text-xs text-red-400">mal</label>
-          <input type="number" min={0} value={f.malEstado} onChange={(e) => setFilas((p) => p.map((x, j) => j === i ? { ...x, malEstado: Number(e.target.value) } : x))} className="input w-16 h-9 tabnum text-center" />
-        </div>
-      ))}
-      {filas.length === 0 && <p className="text-xs text-slate-400">Escaneá al menos un ISBN (un bulto vacío se carga con cantidad 0).</p>}
       <div className="flex items-end gap-3">
-        <Field label="Peso bulto (kg)"><input className="input w-28 tabnum" inputMode="decimal" value={peso} onChange={(e) => setPeso(e.target.value)} /></Field>
+        <Field label="Peso bulto (kg)"><input className="input w-32 tabnum" inputMode="decimal" value={peso} onChange={(e) => setPeso(e.target.value)} /></Field>
         <button className="btn-primary" onClick={guardar}>{etiqueta}</button>
       </div>
       {encolado && (
@@ -812,11 +855,11 @@ function PanelCorreccion({ d, onDone, onError }: { d: Detalle; onDone: () => voi
         <PencilLine className="h-4 w-4" /> Corrección (Administrador)
       </h2>
       <p className="text-xs text-slate-500 mb-3">
-        La devolución no se reabre: la corrección reemplaza el control del bulto, queda en auditoría
-        y re-emite el resultado por ISBN.
+        La devolución no se reabre: la corrección re-pesa un bulto, queda en auditoría
+        y re-emite el resultado de la reconciliación.
       </p>
       <Field label="Motivo de la corrección">
-        <input className="input" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ej: error de tipeo en cantidad" />
+        <input className="input" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ej: error de tipeo en el peso" />
       </Field>
       <div className="space-y-2 mt-3">
         {d.bultos.map((b) => (
@@ -825,12 +868,11 @@ function PanelCorreccion({ d, onDone, onError }: { d: Detalle; onDone: () => voi
               onClick={() => setActivo(activo === b.numero ? null : b.numero)}
               className="w-full flex items-center justify-between px-4 h-11 rounded-lg border border-slate-200 bg-white text-sm"
             >
-              <span className="font-medium">Bulto {b.numero}</span>
+              <span className="font-medium">Bulto {b.numero}{b.peso ? <span className="ml-2 text-xs text-slate-400 tabnum">{b.peso} kg</span> : null}</span>
               <span className="text-xs text-slate-400">{activo === b.numero ? 'cerrar' : 'corregir'}</span>
             </button>
             {activo === b.numero && (
-              <ControlBulto
-                inicial={b.controles.map((c) => ({ isbn: c.isbn, titulo: c.titulo ?? c.isbn, editorial: c.editorial, imagenUrl: c.imagenUrl, cantidad: c.cantidad, malEstado: c.malEstado }))}
+              <PesarBulto
                 pesoInicial={b.peso ?? ''}
                 etiqueta="Guardar corrección"
                 onGuardar={(payload) =>
@@ -850,43 +892,44 @@ function PanelCorreccion({ d, onDone, onError }: { d: Detalle; onDone: () => voi
   );
 }
 
-type LineaRec = { isbn: string; titulo: string | null; declarado: number; recibido: number; bueno: number; malo: number; saldoConsignacion: number | null; excedeConsignacion: boolean };
+type LineaRec = { isbn: string; titulo: string | null; declarado: number; cantidadFierro: number | null; diferencia: number | null };
 
 function PanelReconciliacion({ id, d }: { id: number; d: Detalle }) {
   const [rec, setRec] = useState<LineaRec[] | null>(null);
   useEffect(() => { api.get<LineaRec[]>(`/devoluciones/autorizaciones/${id}/reconciliacion`).then(setRec).catch(() => setRec([])); }, [id]);
-  const hayExceso = rec?.some((r) => r.excedeConsignacion);
+  const hayDiferencias = rec?.some((r) => r.diferencia !== null && r.diferencia !== 0);
   return (
     <Card>
       <h2 className="font-semibold mb-1 flex items-center gap-2 text-emerald-700"><CheckCircle2 className="h-5 w-5" /> Procesado</h2>
+      <p className="text-sm text-slate-500 mb-1">Lote ERP: <b className="tabnum">{d.loteCodigo || '—'}</b></p>
       <p className="text-sm text-slate-500 mb-4">Buenos → {d.ubicacionDestinoBueno || '—'} · Malos → {d.ubicacionDestinoMalo || '—'}</p>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="text-slate-500 text-left"><tr>
-            <th className="py-2 font-medium">Título</th><th className="font-medium">ISBN</th><th className="font-medium text-right">Decl.</th><th className="font-medium text-right">Recib.</th><th className="font-medium text-right">Bueno</th><th className="font-medium text-right">Malo</th><th className="font-medium text-right">Consig.</th>
+            <th className="py-2 font-medium">Título</th><th className="font-medium">ISBN</th><th className="font-medium text-right">Declarado</th><th className="font-medium text-right">ERP (Fierro)</th><th className="font-medium text-right">Diferencia</th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100">
-            {rec?.map((r) => (
-              <tr key={r.isbn} className={r.excedeConsignacion ? 'bg-amber-50' : undefined}>
-                <td className="py-2 pr-2 max-w-48 truncate">{r.titulo ?? '—'}</td>
-                <td className="tabnum text-slate-500">{r.isbn}</td>
-                <td className="text-right tabnum">{r.declarado}</td>
-                <td className="text-right tabnum">{r.recibido}</td>
-                <td className="text-right tabnum text-emerald-700 font-semibold">{r.bueno}</td>
-                <td className="text-right tabnum text-red-600 font-semibold">{r.malo}</td>
-                <td className="text-right tabnum">
-                  {r.saldoConsignacion ?? '—'}
-                  {r.excedeConsignacion && (
-                    <span className="ml-1 inline-flex items-center rounded bg-amber-100 px-1 text-[10px] font-semibold text-amber-700" title="La devolución excede el saldo en consignación">excede</span>
-                  )}
-                </td>
-              </tr>
-            ))}
+            {rec?.map((r) => {
+              const dif = r.diferencia;
+              const declaradoSinErp = r.cantidadFierro === null && r.declarado > 0;
+              const resalta = (dif !== null && dif !== 0) || declaradoSinErp;
+              return (
+                <tr key={r.isbn} className={resalta ? 'bg-amber-50' : undefined}>
+                  <td className="py-2 pr-2 max-w-48 truncate">{r.titulo ?? '—'}</td>
+                  <td className="tabnum text-slate-500">{r.isbn}</td>
+                  <td className="text-right tabnum">{r.declarado}</td>
+                  <td className="text-right tabnum">{r.cantidadFierro ?? '—'}</td>
+                  <td className={`text-right tabnum font-semibold ${declaradoSinErp ? 'text-amber-700' : dif === null ? 'text-slate-400' : dif === 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
+                    {dif === null ? '—' : dif > 0 ? `+${dif}` : dif}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
-      {hayExceso && (
-        <p className="mt-3 text-xs text-amber-700">Hay títulos cuya cantidad recibida supera el saldo en consignación del cliente (ver observaciones).</p>
+      {hayDiferencias && (
+        <p className="mt-3 text-xs text-amber-700">Hay títulos con diferencia entre lo declarado y el lote del ERP (positivo = el cliente declaró de más; negativo = faltante).</p>
       )}
     </Card>
   );

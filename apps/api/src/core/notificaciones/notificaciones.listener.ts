@@ -9,12 +9,29 @@ import { NotificacionesService } from './notificaciones.service';
  * por los campos del contrato; campos extra se ignoran.
  */
 const DEVOLUCION_ESTADO_CAMBIADO = 'devolucion.estado_cambiado';
+const DEVOLUCION_LOTE_EVALUADO = 'devolucion.lote_evaluado';
 
 interface DevolucionEstadoCambiadoEvent {
   autorizacionId: number;
   clienteId: number;
   estadoAnterior: string;
   estadoNuevo: string;
+  ts: string;
+}
+
+interface LoteEvaluadoLinea {
+  isbn: string;
+  titulo: string | null;
+  declarado: number;
+  cantidadFierro: number | null;
+  diferencia: number | null;
+}
+interface DevolucionLoteEvaluadoEvent {
+  autorizacionId: number;
+  clienteId: number;
+  loteCodigo: string;
+  reconciliacion: LoteEvaluadoLinea[];
+  hayDiferencias: boolean;
   ts: string;
 }
 
@@ -44,6 +61,49 @@ export class NotificacionesListener {
     } catch (err) {
       this.logger.error(`onEstadoCambiado falló: ${(err as Error).message}`);
     }
+  }
+
+  /**
+   * Chequeo periódico de lotes: avisa a los responsables (regla por estado
+   * "LOTE_EVALUADO") con el detalle de la comparación declarado vs lote del ERP.
+   */
+  @OnEvent(DEVOLUCION_LOTE_EVALUADO, { async: true })
+  async onLoteEvaluado(ev: DevolucionLoteEvaluadoEvent): Promise<void> {
+    try {
+      await this.svc.notificarCambioEstado({
+        modulo: 'devoluciones',
+        estado: 'LOTE_EVALUADO',
+        entidadId: ev.autorizacionId,
+        clienteId: ev.clienteId,
+        fechaIso: ev.ts,
+        detalle: this.detalleReconciliacion(ev),
+      });
+    } catch (err) {
+      this.logger.error(`onLoteEvaluado falló: ${(err as Error).message}`);
+    }
+  }
+
+  /** Arma el texto del detalle de la reconciliación para el cuerpo del mail. */
+  private detalleReconciliacion(ev: DevolucionLoteEvaluadoEvent): string {
+    const cab = `Lote del ERP: ${ev.loteCodigo}.`;
+    if (!ev.hayDiferencias) {
+      return `${cab}\nLo declarado coincide con el lote del ERP (sin diferencias).`;
+    }
+    const esDiferencia = (l: LoteEvaluadoLinea) =>
+      l.cantidadFierro === null ? l.declarado > 0 : l.diferencia !== null && l.diferencia !== 0;
+    const filas = ev.reconciliacion
+      .filter(esDiferencia)
+      .map((l) => {
+        const t = l.titulo ?? l.isbn;
+        if (l.cantidadFierro === null) {
+          return `- ${t} (${l.isbn}): declarado ${l.declarado}, NO figura en el lote del ERP`;
+        }
+        const dif = l.diferencia as number;
+        const signo = dif > 0 ? `+${dif} (declaró de más)` : `${dif} (faltante)`;
+        return `- ${t} (${l.isbn}): declarado ${l.declarado}, ERP ${l.cantidadFierro} → ${signo}`;
+      })
+      .join('\n');
+    return `${cab}\nDiferencias detectadas:\n${filas}`;
   }
 
   /** Reintenta los envíos fallidos/pendientes cada 5 minutos (outbox). */

@@ -190,6 +190,8 @@ export class NotificacionesService {
     entidadId: number;
     clienteId: number;
     fechaIso?: string;
+    /** Texto extra para el placeholder {{detalle}} (p.ej. diferencias de lote). */
+    detalle?: string;
   }): Promise<void> {
     try {
       const regla = await this.prisma.notificacionRegla.findUnique({
@@ -234,6 +236,7 @@ export class NotificacionesService {
         estado: params.estado,
         estadoAnterior: params.estadoAnterior,
         fecha: this.formatearFecha(params.fechaIso),
+        detalle: params.detalle,
       };
       const asunto = renderPlantilla(regla.asunto, ctx);
       const cuerpo = renderPlantilla(regla.cuerpo, ctx);

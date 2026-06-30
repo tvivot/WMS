@@ -23,6 +23,8 @@ export interface ContextoPlantilla {
   estado: string;
   estadoAnterior?: string;
   fecha: string;
+  /** Texto libre extra (p.ej. el detalle de diferencias de un chequeo de lote). */
+  detalle?: string;
 }
 
 /**
@@ -36,6 +38,7 @@ export function renderPlantilla(plantilla: string, ctx: ContextoPlantilla): stri
     estado: estadoLabel(ctx.estado),
     estadoAnterior: ctx.estadoAnterior ? estadoLabel(ctx.estadoAnterior) : '',
     fecha: ctx.fecha,
+    detalle: ctx.detalle ?? '',
   };
   return plantilla.replace(/\{\{\s*(\w+)\s*\}\}/g, (m, clave: string) =>
     clave in valores ? valores[clave] : m,

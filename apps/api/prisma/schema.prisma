@@ -365,6 +365,14 @@ model DevAutorizacion {
   // Registrado en depósito
   bultosRecibidos Int? @map("bultos_recibidos")
 
+  // Lote de devolución del ERP (Fierro) contra el que se reconcilia. Se puede
+  // asignar antes del cierre (para la validación periódica) y es obligatorio para
+  // Procesar. Referencia por código a dev_lote (mismo módulo); no FK.
+  loteCodigo            String? @map("lote_codigo") @db.VarChar(60)
+  // Firma (hash) de la última reconciliación notificada por el chequeo periódico
+  // de lotes: evita re-mandar el mail salvo que la comparación cambie.
+  loteValidacionFirma   String? @map("lote_validacion_firma") @db.VarChar(64)
+
   // Ubicaciones: CÓDIGO string, validado por UbicacionResolverPort (NO FK).
   ubicacionEspera       String? @map("ubicacion_espera") @db.VarChar(60)
   ubicacionDestinoBueno String? @map("ubicacion_destino_bueno") @db.VarChar(60)
@@ -490,4 +498,53 @@ model DevExcepcionConsignacion {
   @@index([autorizacionId])
   @@index([estado])
   @@map("dev_excepcion_consignacion")
+}
+
+/// Lote de devolución importado del ERP (Fierro) por el integrador, vía
+/// DevolucionesLotePort. Es el dato "oficial" contra el que la reconciliación
+/// compara lo declarado por el cliente en el WMS. Identidad por `codigo`
+/// (= return_lot.document_id de Fierro): idempotente, upsert por codigo que
+/// reemplaza los renglones. Referencias al núcleo por código (sin FK cruzada).
+/// Las fechas se guardan TAL CUAL las manda Fierro (string), para no transformar
+/// input externo ni introducir ambigüedad de zona horaria.
+model DevLote {
+  id                 Int      @id @default(autoincrement())
+  codigo             String   @unique @db.VarChar(60)
+  numero             String?  @db.VarChar(60)
+  fecha              String?  @db.VarChar(40)
+  nroCliente         String   @map("nro_cliente") @db.VarChar(40)
+  clienteNombre      String?  @map("cliente_nombre") @db.VarChar(200)
+  deposito           String?  @db.VarChar(150)
+  estado             String?  @db.VarChar(60)
+  motivo             String?  @db.VarChar(200)
+  remitoCliente      String?  @map("remito_cliente") @db.VarChar(60)
+  fechaRemitoCliente String?  @map("fecha_remito_cliente") @db.VarChar(40)
+  totalItems         Int?     @map("total_items")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  items DevLoteItem[]
+
+  @@index([nroCliente])
+  @@map("dev_lote")
+}
+
+/// Renglón de un lote de devolución de Fierro. `cantidad` es lo que el ERP
+/// espera; cantidadCliente/cantidadRechazada vienen del ERP para detalle. Se
+/// reemplazan por completo en cada upsert del lote.
+model DevLoteItem {
+  id                Int     @id @default(autoincrement())
+  loteId            Int     @map("lote_id")
+  isbn              String  @db.VarChar(20)
+  cantidad          Int
+  cantidadCliente   Int?    @map("cantidad_cliente")
+  cantidadRechazada Int?    @map("cantidad_rechazada")
+  titulo            String? @db.VarChar(300)
+  intCode           String? @map("int_code") @db.VarChar(60)
+
+  lote DevLote @relation(fields: [loteId], references: [id], onDelete: Cascade)
+
+  @@unique([loteId, isbn])
+  @@index([loteId])
+  @@map("dev_lote_item")
 }

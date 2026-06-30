@@ -1,13 +1,14 @@
 import { Transform, Type } from 'class-transformer';
 import {
-  ArrayMinSize,
   IsArray,
   IsBoolean,
   IsInt,
   IsNumber,
   IsOptional,
   IsString,
+  MaxLength,
   Min,
+  MinLength,
   ValidateNested,
 } from 'class-validator';
 
@@ -120,36 +121,18 @@ export class IngresoDto {
   ubicacionEspera?: string;
 }
 
-export class LineaControlDto {
-  @IsString()
-  isbn!: string;
-
-  @IsInt()
-  @Min(0)
-  cantidad!: number;
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  malEstado?: number;
-}
-
+/**
+ * Control de un bulto: se PESA el bulto y se marca controlado. El conteo de
+ * libros por ISBN se hace en otro proceso (ya no acá). El peso es obligatorio:
+ * controlar un bulto = registrar su peso.
+ */
 export class ControlarBultoDto {
-  @IsOptional()
   @IsNumber()
   @Min(0)
-  peso?: number;
-
-  // Al menos una línea: un bulto vacío se registra con su ISBN y cantidad 0,
-  // no con una lista vacía (evita marcar "controlado" sin haber cargado nada).
-  @IsArray()
-  @ArrayMinSize(1)
-  @ValidateNested({ each: true })
-  @Type(() => LineaControlDto)
-  controles!: LineaControlDto[];
+  peso!: number;
 }
 
-/** Corrección post-Procesado de un bulto (permiso devolucion.corregir). */
+/** Corrección post-Procesado de un bulto (permiso devolucion.corregir): re-pesa. */
 export class CorregirControlDto extends ControlarBultoDto {
   @IsOptional()
   @IsString()
@@ -187,7 +170,24 @@ export class ResolverExcepcionDto {
   motivo?: string;
 }
 
+/** Asignación del lote del ERP a una devolución antes del cierre (validación periódica). */
+export class AsignarLoteDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(60)
+  loteCodigo!: string;
+}
+
 export class CerrarDto {
+  // Lote de devolución del ERP (Fierro). Obligatorio para cerrar, pero opcional en
+  // el DTO: si no viene, se usa el ya asignado a la devolución. El servicio exige
+  // que exista alguno.
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(60)
+  loteCodigo?: string;
+
   // Destinos informativos: opcionales para procesar. Si se cargan, el puerto los valida.
   @IsOptional()
   @IsString()

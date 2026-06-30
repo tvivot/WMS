@@ -40,7 +40,20 @@ interface Regla {
   usuarioIds: number[];
 }
 
-const PLACEHOLDERS = '{{nro}} · {{cliente}} · {{estado}} · {{estadoAnterior}} · {{fecha}}';
+const PLACEHOLDERS = '{{nro}} · {{cliente}} · {{estado}} · {{estadoAnterior}} · {{fecha}} · {{detalle}}';
+
+/** Etiquetas de reglas que no son un estado de la máquina (claves lógicas). */
+const ETIQUETA_REGLA: Record<string, string> = {
+  LOTE_EVALUADO: 'Validación de lote (ERP)',
+};
+function etiquetaRegla(estado: string): string {
+  return ETIQUETA_REGLA[estado] ?? ESTADO_LABEL[estado as Estado] ?? estado;
+}
+/** Orden: estados de la máquina primero (por su orden), claves lógicas al final. */
+function ordenRegla(estado: string): number {
+  const i = ESTADOS_ORDEN.indexOf(estado as Estado);
+  return i === -1 ? 999 : i;
+}
 
 export function Notificaciones() {
   const [office365, setOffice365] = useState<EstadoO365 | null>(null);
@@ -401,10 +414,7 @@ function ReglasPanel({
 }) {
   // Ordena las reglas por el orden de la máquina de estados.
   const ordenadas = reglas
-    ? [...reglas].sort(
-        (a, b) =>
-          ESTADOS_ORDEN.indexOf(a.estado as Estado) - ESTADOS_ORDEN.indexOf(b.estado as Estado),
-      )
+    ? [...reglas].sort((a, b) => ordenRegla(a.estado) - ordenRegla(b.estado))
     : null;
 
   return (
@@ -455,7 +465,7 @@ function ReglaCard({
   });
   const [guardando, setGuardando] = useState(false);
 
-  const label = ESTADO_LABEL[regla.estado as Estado] ?? regla.estado;
+  const label = etiquetaRegla(regla.estado);
   const destinos = regla.grupoIds.length + regla.usuarioIds.length + (regla.incluirCliente ? 1 : 0);
 
   const toggleGrupo = (id: number) =>

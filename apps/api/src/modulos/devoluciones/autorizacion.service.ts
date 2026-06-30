@@ -3,9 +3,11 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Readable } from 'node:stream';
+import { createHash } from 'node:crypto';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { DevEstado, DevEstadoControl, DevExcepcionEstado, Prisma } from '@prisma/client';
 import { Workbook } from 'exceljs';
@@ -21,15 +23,16 @@ import {
   CrearAutorizacionDto,
   DeclararDto,
   IngresoDto,
-  LineaControlDto,
   RecibirDto,
   ResolverExcepcionDto,
   SolicitarExcepcionDto,
 } from './dto';
 import {
   DEVOLUCION_ESTADO_CAMBIADO,
+  DEVOLUCION_LOTE_EVALUADO,
   DEVOLUCION_PROCESADA,
   type DevolucionEstadoCambiadoEvent,
+  type DevolucionLoteEvaluadoEvent,
   type DevolucionProcesadaEvent,
   type ReconciliacionLinea,
 } from './eventos/eventos';
@@ -127,6 +130,10 @@ const ESTADO_LABEL_EXPORT: Record<DevEstado, string> = {
 
 @Injectable()
 export class AutorizacionService {
+  private readonly logger = new Logger(AutorizacionService.name);
+  /** Anti-solape del chequeo periódico de lotes (evita re-emitir/duplicar mails). */
+  private evaluandoLotes = false;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly catalogo: CatalogoService,
@@ -795,57 +802,10 @@ export class AutorizacionService {
   }
 
   /**
-   * Resuelve y valida las líneas de control de un bulto: ISBN normalizado y
-   * catalogado (misma regla que la declaración: avisar, no cargar fantasmas),
-   * mal estado ≤ cantidad.
+   * Control de un bulto: se PESA y se marca controlado (estado INGRESO_DEPOSITO).
+   * El conteo de libros por ISBN se hace en OTRO proceso (ya no acá); al cerrar,
+   * la reconciliación compara lo declarado por el cliente contra el lote del ERP.
    */
-  private async resolverControles(
-    bultoId: number,
-    controles: LineaControlDto[],
-  ): Promise<
-    { bultoId: number; isbn: string; productoId: number; cantidad: number; malEstado: number }[]
-  > {
-    const filas: { bultoId: number; isbn: string; productoId: number; cantidad: number; malEstado: number }[] = [];
-    const noCatalogados: string[] = [];
-    // Resolución en bloque (1 query) en vez de un findUnique por control (N+1).
-    const productos = await this.catalogo.resolverPorIsbnBatch(
-      controles.map((c) => c.isbn),
-    );
-    for (const c of controles) {
-      const norm = normalizarIsbn(c.isbn);
-      if (!norm) throw new BadRequestException(`ISBN inválido: ${c.isbn}`);
-      const malo = c.malEstado ?? 0;
-      if (malo > c.cantidad) {
-        throw new BadRequestException('mal estado no puede superar la cantidad');
-      }
-      const prod = productos.get(norm);
-      if (!prod) {
-        noCatalogados.push(norm);
-        continue;
-      }
-      const ya = filas.find((f) => f.isbn === norm);
-      if (ya) {
-        ya.cantidad += c.cantidad;
-        ya.malEstado += malo;
-      } else {
-        filas.push({
-          bultoId,
-          isbn: norm,
-          productoId: prod.id,
-          cantidad: c.cantidad,
-          malEstado: malo,
-        });
-      }
-    }
-    if (noCatalogados.length > 0) {
-      throw new BadRequestException(
-        `ISBN no catalogados (cargalos al catálogo antes de controlar): ${noCatalogados.join(', ')}`,
-      );
-    }
-    return filas;
-  }
-
-  /** Control de un bulto: cantidades + mal estado por ISBN (estado INGRESO_DEPOSITO). */
   async controlarBulto(
     actor: JwtPayload,
     id: number,
@@ -859,34 +819,32 @@ export class AutorizacionService {
     });
     if (!bulto) throw new NotFoundException('Bulto inexistente');
 
-    const filas = await this.resolverControles(bulto.id, dto.controles);
-
-    await this.prisma.$transaction([
-      this.prisma.devControl.deleteMany({ where: { bultoId: bulto.id } }),
-      this.prisma.devControl.createMany({ data: filas }),
-      this.prisma.devBulto.update({
-        where: { id: bulto.id },
-        data: {
-          peso: dto.peso ?? bulto.peso,
-          estadoControl: DevEstadoControl.CONTROLADO,
-        },
-      }),
-    ]);
+    await this.prisma.devBulto.update({
+      where: { id: bulto.id },
+      data: { peso: dto.peso, estadoControl: DevEstadoControl.CONTROLADO },
+    });
     await this.auditoria.registrar({
       actorId: actor.sub,
       actorTipo: actor.tipo,
       accion: 'controlar_bulto',
       entidad: 'dev_bulto',
       entidadId: `${id}/${numero}`,
-      detalle: { lineas: filas.length },
+      detalle: { peso: dto.peso },
     });
     return this.detalle(id);
   }
 
-  /** Cierre: reconciliación + destinos + Procesado + evento devolucion.procesada. */
+  /** Cierre: reconciliación contra el lote del ERP + destinos + Procesado + evento. */
   async cerrar(actor: JwtPayload, id: number, dto: CerrarDto) {
     const a = await this.obtenerOr404(id);
     this.exigirEstado(a.estado, DevEstado.INGRESO_DEPOSITO);
+
+    // Lote del ERP (Fierro): obligatorio para cerrar. Se toma el del DTO o, si no
+    // viene, el ya asignado a la devolución. Debe existir y ser del mismo cliente.
+    const loteCodigo = await this.validarLoteDeCliente(
+      dto.loteCodigo ?? a.loteCodigo ?? '',
+      a.clienteId,
+    );
 
     const bultos = await this.prisma.devBulto.findMany({ where: { autorizacionId: id } });
     if (bultos.length === 0) {
@@ -929,19 +887,9 @@ export class AutorizacionService {
       );
     }
 
-    const reconciliacion = await this.calcularReconciliacion(id, a.clienteId);
-
-    // Exceso de consignación (recibido > saldo del ERP): no bloquea, exige
-    // observación propia del cierre (mismo criterio que la diferencia de peso).
-    if (reconciliacion.some((l) => l.excedeConsignacion) && !dto.observaciones) {
-      const excedidos = reconciliacion
-        .filter((l) => l.excedeConsignacion)
-        .map((l) => l.isbn)
-        .join(', ');
-      throw new BadRequestException(
-        `Hay devoluciones que exceden el saldo en consignación (${excedidos}): observación obligatoria`,
-      );
-    }
+    // Reconciliación contra el lote del ERP. El gate de consignación ya se aplicó
+    // al declarar (saldo + excepciones); acá no se re-chequea (no hay "recibido").
+    const reconciliacion = await this.calcularReconciliacion(id, loteCodigo);
 
     const actualizada = await this.transicionar(
       id,
@@ -949,6 +897,7 @@ export class AutorizacionService {
       a.estado,
       DevEstado.PROCESADO,
       {
+        loteCodigo,
         ubicacionDestinoBueno,
         ubicacionDestinoMalo,
         observaciones: this.acumularObservacion(a.observaciones, 'Cierre', dto.observaciones),
@@ -971,10 +920,151 @@ export class AutorizacionService {
   }
 
   /**
+   * Valida un código de lote del ERP para un cliente: existe (importado) y es del
+   * mismo cliente (compara nroCliente trimeando ambos lados; no se saltea con
+   * lote.nroCliente vacío). Devuelve el código normalizado (trim).
+   */
+  private async validarLoteDeCliente(
+    loteCodigoRaw: string,
+    clienteId: number,
+  ): Promise<string> {
+    const loteCodigo = (loteCodigoRaw ?? '').trim();
+    if (!loteCodigo) {
+      throw new BadRequestException('El lote del ERP es obligatorio');
+    }
+    const lote = await this.prisma.devLote.findUnique({ where: { codigo: loteCodigo } });
+    if (!lote) {
+      throw new BadRequestException(
+        `Lote "${loteCodigo}" no encontrado: ¿se importó desde el ERP?`,
+      );
+    }
+    const cli = await this.prisma.cliente.findUnique({
+      where: { id: clienteId },
+      select: { nroCliente: true },
+    });
+    if (cli && cli.nroCliente.trim() !== (lote.nroCliente ?? '').trim()) {
+      throw new BadRequestException(
+        `El lote ${loteCodigo} es del cliente ${lote.nroCliente || '—'}, no de esta devolución`,
+      );
+    }
+    return loteCodigo;
+  }
+
+  /**
+   * Asigna el lote del ERP a una devolución ANTES del cierre (para el chequeo
+   * periódico de validación). Solo en estados declarados-y-sin-procesar. Resetea
+   * la firma de validación para que el cron vuelva a evaluar/avisar.
+   */
+  async asignarLote(actor: JwtPayload, id: number, loteCodigo: string) {
+    const a = await this.obtenerOr404(id);
+    const permitidos: DevEstado[] = [
+      DevEstado.EN_TRANSITO,
+      DevEstado.ENTREGADO,
+      DevEstado.INGRESO_DEPOSITO,
+    ];
+    if (!permitidos.includes(a.estado)) {
+      throw new BadRequestException(
+        'El lote se asigna a una devolución despachada y sin procesar',
+      );
+    }
+    const codigo = await this.validarLoteDeCliente(loteCodigo, a.clienteId);
+    // Reasignar el MISMO lote no resetea la firma: evita un re-aviso sin cambios.
+    const cambioLote = a.loteCodigo !== codigo;
+    await this.prisma.devAutorizacion.update({
+      where: { id },
+      data: { loteCodigo: codigo, ...(cambioLote ? { loteValidacionFirma: null } : {}) },
+    });
+    await this.auditoria.registrar({
+      actorId: actor.sub,
+      actorTipo: actor.tipo,
+      accion: 'asignar_lote',
+      entidad: 'dev_autorizacion',
+      entidadId: String(id),
+      detalle: { loteCodigo: codigo },
+    });
+    return this.detalle(id);
+  }
+
+  /** Firma estable de una reconciliación (para deduplicar el aviso del cron). */
+  private firmaReconciliacion(rec: ReconciliacionLinea[]): string {
+    const base = rec
+      .map((l) => `${l.isbn}:${l.declarado}:${l.cantidadFierro ?? ''}`)
+      .join('|');
+    return createHash('sha256').update(base).digest('hex').slice(0, 64);
+  }
+
+  /**
+   * Chequeo periódico (lo dispara el cron): por cada devolución declarada y sin
+   * procesar que tenga lote asignado, reconcilia declarado vs lote del ERP y, si
+   * la comparación CAMBIÓ desde el último aviso, emite devolucion.lote_evaluado
+   * (lo consume Notificaciones) y guarda la nueva firma. Nunca lanza por una
+   * devolución: un fallo aislado no frena el resto del lote.
+   */
+  async evaluarLotesPendientes(): Promise<{ evaluadas: number; notificadas: number }> {
+    // Anti-solape: si una corrida previa sigue procesando, salir (evita duplicar
+    // mails cuando un lote tarda más que el intervalo del cron).
+    if (this.evaluandoLotes) return { evaluadas: 0, notificadas: 0 };
+    this.evaluandoLotes = true;
+    try {
+      const pendientes = await this.prisma.devAutorizacion.findMany({
+        where: {
+          estado: {
+            in: [DevEstado.EN_TRANSITO, DevEstado.ENTREGADO, DevEstado.INGRESO_DEPOSITO],
+          },
+          loteCodigo: { not: null },
+        },
+        select: { id: true, clienteId: true, loteCodigo: true, loteValidacionFirma: true },
+      });
+      let notificadas = 0;
+      for (const a of pendientes) {
+        try {
+          const reconciliacion = await this.calcularReconciliacion(a.id, a.loteCodigo);
+          const firma = this.firmaReconciliacion(reconciliacion);
+          if (firma === a.loteValidacionFirma) continue; // sin cambios → no re-avisa
+          const hayDiferencias = reconciliacion.some((l) => this.esLineaConDiferencia(l));
+          // Persistir la firma ANTES de emitir: junto con el guard, una corrida
+          // solapada ya ve el nuevo valor y no re-emite el mismo aviso.
+          await this.prisma.devAutorizacion.update({
+            where: { id: a.id },
+            data: { loteValidacionFirma: firma },
+          });
+          const ev: DevolucionLoteEvaluadoEvent = {
+            autorizacionId: a.id,
+            clienteId: a.clienteId,
+            loteCodigo: a.loteCodigo!,
+            reconciliacion,
+            hayDiferencias,
+            ts: new Date().toISOString(),
+          };
+          this.eventos.emit(DEVOLUCION_LOTE_EVALUADO, ev);
+          notificadas++;
+        } catch (err) {
+          this.logger.warn(
+            `Evaluación de lote falló para la devolución ${a.id}: ${(err as Error).message}`,
+          );
+        }
+      }
+      return { evaluadas: pendientes.length, notificadas };
+    } finally {
+      this.evaluandoLotes = false;
+    }
+  }
+
+  /**
+   * Una línea cuenta como diferencia si: hay diferencia ≠ 0 contra el lote, O el
+   * cliente declaró un ISBN que NO figura en el lote del ERP (cantidadFierro null
+   * con declarado > 0) — eso también es un descuadre, no "sin diferencias".
+   */
+  private esLineaConDiferencia(l: ReconciliacionLinea): boolean {
+    if (l.cantidadFierro === null) return l.declarado > 0;
+    return l.diferencia !== null && l.diferencia !== 0;
+  }
+
+  /**
    * Corrección post-Procesado (permiso devolucion.corregir; por defecto solo
-   * Administrador). Una devolución Procesada NO se reabre: la corrección
-   * reemplaza el control de un bulto, queda en auditoría y re-emite
-   * devolucion.procesada con correccion=true para los consumidores.
+   * Administrador). Una devolución Procesada NO se reabre: la corrección re-pesa
+   * un bulto, queda en auditoría y re-emite devolucion.procesada con
+   * correccion=true para los consumidores.
    */
   async corregirControl(
     actor: JwtPayload,
@@ -989,14 +1079,10 @@ export class AutorizacionService {
     });
     if (!bulto) throw new NotFoundException('Bulto inexistente');
 
-    const filas = await this.resolverControles(bulto.id, dto.controles);
-
     await this.prisma.$transaction([
-      this.prisma.devControl.deleteMany({ where: { bultoId: bulto.id } }),
-      this.prisma.devControl.createMany({ data: filas }),
       this.prisma.devBulto.update({
         where: { id: bulto.id },
-        data: { peso: dto.peso ?? bulto.peso },
+        data: { peso: dto.peso },
       }),
       this.prisma.devAutorizacion.update({
         where: { id },
@@ -1004,7 +1090,7 @@ export class AutorizacionService {
           observaciones: this.acumularObservacion(
             a.observaciones,
             `Corrección bulto ${numero}`,
-            dto.observaciones ?? 'control corregido',
+            dto.observaciones ?? 'peso corregido',
           ),
         },
       }),
@@ -1015,10 +1101,10 @@ export class AutorizacionService {
       accion: 'correccion_control',
       entidad: 'dev_bulto',
       entidadId: `${id}/${numero}`,
-      detalle: { lineas: filas.length, observaciones: dto.observaciones ?? null },
+      detalle: { peso: dto.peso, observaciones: dto.observaciones ?? null },
     });
 
-    const reconciliacion = await this.calcularReconciliacion(id, a.clienteId);
+    const reconciliacion = await this.calcularReconciliacion(id, a.loteCodigo ?? null);
     const ev: DevolucionProcesadaEvent = {
       autorizacionId: id,
       clienteId: a.clienteId,
@@ -1047,26 +1133,28 @@ export class AutorizacionService {
   async reconciliacionAutorizada(actor: JwtPayload, id: number) {
     const a = await this.obtenerOr404(id);
     this.verificarPropiedad(actor, a.clienteId);
-    return this.calcularReconciliacion(id, a.clienteId);
+    return this.calcularReconciliacion(id, a.loteCodigo ?? null);
   }
 
   /**
-   * Reconciliación declarado vs recibido por ISBN (agrega sobre todos los
-   * bultos) + saldo en consignación del cliente. `excedeConsignacion` marca
-   * (no bloquea) cuando se recibió más de lo que el cliente tenía en
-   * consignación; saldo null = sin dato del ERP (nunca marca exceso).
+   * Reconciliación por ISBN: lo DECLARADO por el cliente en el WMS vs la cantidad
+   * del LOTE del ERP (Fierro). `diferencia = declarado - cantidadFierro` (null si
+   * el ISBN no está en el lote, o si la devolución todavía no tiene lote). El
+   * conteo real de libros por título lo hace otro proceso, no acá.
    */
   async calcularReconciliacion(
     id: number,
-    clienteId: number,
+    loteCodigo: string | null,
   ): Promise<ReconciliacionLinea[]> {
-    const [declaraciones, bultos] = await Promise.all([
-      this.prisma.devDeclaracion.findMany({ where: { autorizacionId: id } }),
-      this.prisma.devBulto.findMany({
-        where: { autorizacionId: id },
-        include: { controles: true },
-      }),
-    ]);
+    const declaraciones = await this.prisma.devDeclaracion.findMany({
+      where: { autorizacionId: id },
+    });
+    const lote = loteCodigo
+      ? await this.prisma.devLote.findUnique({
+          where: { codigo: loteCodigo },
+          include: { items: true },
+        })
+      : null;
 
     const mapa = new Map<string, ReconciliacionLinea>();
     const get = (isbn: string, productoId: number | null): ReconciliacionLinea => {
@@ -1077,11 +1165,8 @@ export class AutorizacionService {
           productoId,
           titulo: null,
           declarado: 0,
-          recibido: 0,
-          bueno: 0,
-          malo: 0,
-          saldoConsignacion: null,
-          excedeConsignacion: false,
+          cantidadFierro: null,
+          diferencia: null,
         };
         mapa.set(isbn, l);
       }
@@ -1092,34 +1177,28 @@ export class AutorizacionService {
     for (const d of declaraciones) {
       get(d.isbn, d.productoId).declarado += d.cantidad;
     }
-    for (const b of bultos) {
-      for (const c of b.controles) {
-        const l = get(c.isbn, c.productoId);
-        l.recibido += c.cantidad;
-        l.malo += c.malEstado;
-        l.bueno += c.cantidad - c.malEstado;
-      }
+    // Título de Fierro como fallback para ISBN que sólo están en el lote.
+    const tituloFierro = new Map<string, string | null>();
+    for (const it of lote?.items ?? []) {
+      const l = get(it.isbn, null);
+      l.cantidadFierro = (l.cantidadFierro ?? 0) + it.cantidad;
+      if (!tituloFierro.has(it.isbn)) tituloFierro.set(it.isbn, it.titulo ?? null);
     }
+
     const lineas = [...mapa.values()].sort((a, b) => a.isbn.localeCompare(b.isbn));
-
-    // Saldo en consignación por ISBN (lookup batch, sin N+1). Ausencia de dato
-    // → null y nunca marca exceso.
-    const saldos = await this.consignacion.saldosDe(
-      clienteId,
-      lineas.map((l) => l.isbn),
-    );
     for (const l of lineas) {
-      const saldo = saldos.get(l.isbn);
-      l.saldoConsignacion = saldo ?? null;
-      l.excedeConsignacion = saldo !== undefined && l.recibido > saldo;
+      l.diferencia = l.cantidadFierro === null ? null : l.declarado - l.cantidadFierro;
     }
 
-    // Título desde el catálogo (referencia por ID, sin FK).
+    // Título desde el catálogo (por ID, sin FK); si no resuelve, el de Fierro.
     const info = await this.infoPorProducto(
       lineas.map((l) => l.productoId).filter((x): x is number => x !== null),
     );
     for (const l of lineas) {
-      l.titulo = l.productoId !== null ? (info.get(l.productoId)?.titulo ?? null) : null;
+      l.titulo =
+        l.productoId !== null
+          ? (info.get(l.productoId)?.titulo ?? null)
+          : (tituloFierro.get(l.isbn) ?? null);
     }
     return lineas;
   }
@@ -1290,7 +1369,7 @@ export class AutorizacionService {
       where: { id },
       include: {
         declaraciones: true,
-        bultos: { include: { controles: true }, orderBy: { numero: 'asc' } },
+        bultos: { orderBy: { numero: 'asc' } },
         excepciones: { orderBy: { createdAt: 'desc' } },
       },
     });
@@ -1299,9 +1378,6 @@ export class AutorizacionService {
     // Datos del núcleo resueltos por ID (sin FK): títulos, cliente, transportista.
     const info = await this.infoPorProducto([
       ...a.declaraciones.map((d) => d.productoId).filter((x): x is number => x !== null),
-      ...a.bultos.flatMap((b) =>
-        b.controles.map((c) => c.productoId).filter((x): x is number => x !== null),
-      ),
       ...a.excepciones.map((e) => e.productoId).filter((x): x is number => x !== null),
     ]);
     const [cliente, transportista, creadoPor, motivo] = await Promise.all([
@@ -1354,7 +1430,7 @@ export class AutorizacionService {
       creadoPor,
       motivo,
       declaraciones: a.declaraciones.map(conTitulo),
-      bultos: a.bultos.map((b) => ({ ...b, controles: b.controles.map(conTitulo) })),
+      bultos: a.bultos,
       excepciones: a.excepciones.map(conTitulo),
     };
   }

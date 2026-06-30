@@ -100,6 +100,19 @@ Módulo `core/notificaciones`: envía mails en cada **cambio de estado** de una 
 - **Outbox/reintento:** `core_notificacion_log` registra cada envío (PENDIENTE/ENVIADO/ERROR, cuerpo renderizado). Cron cada 5 min reintenta ERROR/PENDIENTE con `intentos<5`, con **guarda anti-solape** y **ventana de 2 min** (no pisa el envío inline en vuelo → evita duplicados).
 - **Migración:** `20260625120000_core_notificaciones`. **Pendiente de deploy** (corre con `prisma migrate deploy`).
 
+## Reformulación de control + reconciliación por lote del ERP — 2026-06-30
+
+Cambio de fondo en el cierre de devoluciones (decidido con el usuario):
+
+- **El conteo de libros por ISBN salió del control.** El **control** ahora es: por bulto, **registrar el peso** y marcarlo controlado (`POST .../bultos/:n/control` body `{peso}`). El conteo físico de libros se hace en **otro proceso** (a definir).
+- **Lote del ERP (Fierro)** importado por el integrador: tablas `dev_lote` (codigo UNIQUE = `return_lot.document_id`) + `dev_lote_item`. Entra por **`POST /api/integraciones/devoluciones/lotes/import`** (permiso `devolucion.importar`) vía `DevolucionesLotePort` (Integraciones no toca internos). Upsert por codigo, reemplaza renglones. Contrato: [docs/contratos/devoluciones-lote-port.md].
+- **Cierre exige `loteCodigo`** (nueva columna en `dev_autorizacion`): valida que el lote exista y sea del mismo cliente. La **reconciliación** compara, por ISBN, **lo declarado (WMS) vs la cantidad del lote (Fierro)** → `diferencia` (faltante/sobrante). Reemplaza la vieja "declarado vs recibido (control) + exceso de consignación".
+- **`devolucion.procesada`**: `ReconciliacionLinea` cambió a `declarado/cantidadFierro/diferencia` (antes `recibido/bueno/malo/consignación`). Contrato en [docs/contratos/eventos.md]. Lo consumirá Inventario.
+- **El gate de consignación sigue en `declarar()`** (saldo + excepciones); se quitó solo el chequeo de exceso del cierre (era redundante).
+- **Chequeo periódico (cron 15 min):** `LoteScheduler` → `evaluarLotesPendientes()` compara, por cada devolución declarada-y-sin-procesar con lote asignado, declarado vs lote del ERP, y emite `devolucion.lote_evaluado` **solo si cambió** (dedup por `lote_validacion_firma`). El lote se asigna antes del cierre: `PATCH /devoluciones/autorizaciones/:id/lote` (permiso `deposito.ingresar`) + `PanelLote` en la UI. El mail a los responsables lo manda Notificaciones con una regla por estado lógico **LOTE_EVALUADO** (seedeada desactivada, placeholder `{{detalle}}`).
+- **Migraciones pendientes de deploy:** `20260625130000_dev_lote`, `20260625140000_dev_autorizacion_lote`, `20260630120000_dev_lote_validacion`.
+- **Follow-up:** el KPI de informes "calidad de libros (bueno/malo)" leía `dev_control`; deja de poblarse desde acá (va al otro proceso). No rompe; reformular cuando exista ese proceso.
+
 ## Próximos pasos (roadmap CLAUDE.md)
 1. **Ubicaciones** (`ubi_*`): al conectarlo, cambiar UNA línea en `devoluciones.module.ts` (`provide: UBICACION_RESOLVER`).
 2. **Integraciones** (`int_*`) antes del primer sync externo.

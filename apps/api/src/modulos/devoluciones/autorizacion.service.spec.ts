@@ -3,7 +3,7 @@ import { Workbook } from 'exceljs';
 import { DevEstado } from '@prisma/client';
 import type { JwtPayload } from '../../core/auth/jwt-payload';
 import { AutorizacionService } from './autorizacion.service';
-import { DEVOLUCION_ESTADO_CAMBIADO, DEVOLUCION_PROCESADA } from './eventos/eventos';
+import { DEVOLUCION_ESTADO_CAMBIADO, DEVOLUCION_LOTE_EVALUADO, DEVOLUCION_PROCESADA } from './eventos/eventos';
 import { TextFreeUbicacionResolverAdapter } from './puertos/ubicacion-resolver.adapter';
 
 /**
@@ -60,6 +60,20 @@ function crearFakePrisma() {
       { id: 2, titulo: 'Libro B', editorial: null, imagenUrl: null },
       { id: 3, titulo: 'Libro C', editorial: 'Ed C', imagenUrl: null },
     ] as Fila[],
+    // Lote del ERP (Fierro) del cliente C-10 que matchea lo que declara el
+    // camino feliz (A=2, B=3, C=5): la reconciliación da diferencia 0.
+    lotes: [
+      {
+        id: 100,
+        codigo: 'RL-1',
+        nroCliente: 'C-10',
+        items: [
+          { isbn: ISBN_A, cantidad: 2, titulo: 'Libro A' },
+          { isbn: ISBN_B, cantidad: 3, titulo: 'Libro B' },
+          { isbn: ISBN_C, cantidad: 5, titulo: 'Libro C' },
+        ],
+      },
+    ] as Fila[],
   };
 
   const prisma = {
@@ -87,6 +101,8 @@ function crearFakePrisma() {
           bultosDeclarados: null,
           pesoTotalDeclarado: null,
           bultosRecibidos: null,
+          loteCodigo: null,
+          loteValidacionFirma: null,
           ubicacionEspera: null,
           ubicacionDestinoBueno: null,
           ubicacionDestinoMalo: null,
@@ -106,11 +122,22 @@ function crearFakePrisma() {
       },
       findMany: async ({ where = {} }: any) =>
         db.autorizaciones
-          .filter(
-            (a: any) =>
-              (where.estado === undefined || a.estado === where.estado) &&
-              (where.clienteId === undefined || a.clienteId === where.clienteId),
-          )
+          .filter((a: any) => {
+            const estadoOk =
+              where.estado === undefined
+                ? true
+                : where.estado?.in
+                  ? where.estado.in.includes(a.estado)
+                  : a.estado === where.estado;
+            const clienteOk = where.clienteId === undefined || a.clienteId === where.clienteId;
+            const loteOk =
+              where.loteCodigo === undefined
+                ? true
+                : where.loteCodigo?.not === null
+                  ? a.loteCodigo != null
+                  : a.loteCodigo === where.loteCodigo;
+            return estadoOk && clienteOk && loteOk;
+          })
           .sort((x: any, y: any) => y.id - x.id)
           .map((x) => ({ ...x })),
     },
@@ -265,6 +292,14 @@ function crearFakePrisma() {
       findMany: async ({ where }: any) =>
         db.productos.filter((p) => where.id.in.includes(p.id)).map((x) => ({ ...x })),
     },
+    devLote: {
+      findUnique: async ({ where, include }: any) => {
+        const l = db.lotes.find((x: any) => x.codigo === where.codigo);
+        if (!l) return null;
+        const base: any = { id: l.id, codigo: l.codigo, nroCliente: (l as any).nroCliente };
+        return include?.items ? { ...base, items: ((l as any).items as any[]).map((x) => ({ ...x })) } : base;
+      },
+    },
     $transaction: async (ops: Promise<unknown>[]) => Promise.all(ops),
   };
   return { prisma, db };
@@ -362,22 +397,11 @@ async function avanzarHasta(ctx: ReturnType<typeof crearServicio>, hasta: DevEst
   if (hasta === DevEstado.ENTREGADO) return a.id;
   await svc.ingreso(deposito, a.id, { ubicacionEspera: 'DEV-01' });
   if (hasta === DevEstado.INGRESO_DEPOSITO) return a.id;
-  // ISBN B mezclado en los dos bultos; 1 libro C en mal estado.
-  await svc.controlarBulto(deposito, a.id, 1, {
-    peso: 6,
-    controles: [
-      { isbn: ISBN_A, cantidad: 2 },
-      { isbn: ISBN_B, cantidad: 1 },
-    ],
-  });
-  await svc.controlarBulto(deposito, a.id, 2, {
-    peso: 4,
-    controles: [
-      { isbn: ISBN_B, cantidad: 2 },
-      { isbn: ISBN_C, cantidad: 5, malEstado: 1 },
-    ],
-  });
+  // Control = pesar cada bulto (6 + 4 = 10) y marcarlo controlado.
+  await svc.controlarBulto(deposito, a.id, 1, { peso: 6 });
+  await svc.controlarBulto(deposito, a.id, 2, { peso: 4 });
   await svc.cerrar(deposito, a.id, {
+    loteCodigo: 'RL-1',
     ubicacionDestinoBueno: 'A-01',
     ubicacionDestinoMalo: 'DAN-01',
   });
@@ -596,13 +620,25 @@ describe('AutorizacionService — máquina de estados', () => {
   it('no permite cerrar con bultos sin controlar', async () => {
     const ctx = crearServicio();
     const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
-    await ctx.svc.controlarBulto(deposito, id, 1, {
-      peso: 6,
-      controles: [{ isbn: ISBN_A, cantidad: 2 }],
-    });
+    await ctx.svc.controlarBulto(deposito, id, 1, { peso: 6 });
     await expect(
-      ctx.svc.cerrar(deposito, id, { ubicacionDestinoBueno: 'A-01', ubicacionDestinoMalo: 'DAN-01' }),
+      ctx.svc.cerrar(deposito, id, { loteCodigo: 'RL-1', ubicacionDestinoBueno: 'A-01' }),
     ).rejects.toThrow(/sin controlar/);
+  });
+
+  it('exige el lote del ERP para cerrar y valida que exista', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
+    await ctx.svc.controlarBulto(deposito, id, 1, { peso: 6 });
+    await ctx.svc.controlarBulto(deposito, id, 2, { peso: 4 });
+    // Lote inexistente → rechaza.
+    await expect(
+      ctx.svc.cerrar(deposito, id, { loteCodigo: 'NO-EXISTE' }),
+    ).rejects.toThrow(/no encontrado/);
+    // Lote válido → procesa y guarda el código.
+    const r = await ctx.svc.cerrar(deposito, id, { loteCodigo: 'RL-1' });
+    expect(r.autorizacion.estado).toBe(DevEstado.PROCESADO);
+    expect(r.autorizacion.loteCodigo).toBe('RL-1');
   });
 
   it('las ubicaciones son informativas: se ingresa y se procesa sin cargarlas', async () => {
@@ -612,22 +648,10 @@ describe('AutorizacionService — máquina de estados', () => {
     const ing = await ctx.svc.ingreso(deposito, id, {});
     expect(ing.estado).toBe(DevEstado.INGRESO_DEPOSITO);
     expect(ing.ubicacionEspera).toBeNull();
-    await ctx.svc.controlarBulto(deposito, id, 1, {
-      peso: 6,
-      controles: [
-        { isbn: ISBN_A, cantidad: 2 },
-        { isbn: ISBN_B, cantidad: 1 },
-      ],
-    });
-    await ctx.svc.controlarBulto(deposito, id, 2, {
-      peso: 4,
-      controles: [
-        { isbn: ISBN_B, cantidad: 2 },
-        { isbn: ISBN_C, cantidad: 5 },
-      ],
-    });
-    // Cierre SIN ubicaciones destino.
-    const r = await ctx.svc.cerrar(deposito, id, {});
+    await ctx.svc.controlarBulto(deposito, id, 1, { peso: 6 });
+    await ctx.svc.controlarBulto(deposito, id, 2, { peso: 4 });
+    // Cierre SIN ubicaciones destino (pero CON lote, que es obligatorio).
+    const r = await ctx.svc.cerrar(deposito, id, { loteCodigo: 'RL-1' });
     expect(r.autorizacion.estado).toBe(DevEstado.PROCESADO);
     expect(r.autorizacion.ubicacionDestinoBueno).toBeNull();
     expect(r.autorizacion.ubicacionDestinoMalo).toBeNull();
@@ -636,16 +660,11 @@ describe('AutorizacionService — máquina de estados', () => {
   it('una ubicación cargada se guarda (recortada); en blanco queda null', async () => {
     const ctx = crearServicio();
     const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
-    await ctx.svc.controlarBulto(deposito, id, 1, {
-      peso: 6,
-      controles: [{ isbn: ISBN_A, cantidad: 2 }, { isbn: ISBN_B, cantidad: 1 }],
-    });
-    await ctx.svc.controlarBulto(deposito, id, 2, {
-      peso: 4,
-      controles: [{ isbn: ISBN_B, cantidad: 2 }, { isbn: ISBN_C, cantidad: 5 }],
-    });
+    await ctx.svc.controlarBulto(deposito, id, 1, { peso: 6 });
+    await ctx.svc.controlarBulto(deposito, id, 2, { peso: 4 });
     // Buenos: se carga (con espacios → se recorta). Malos: en blanco → null.
     const r = await ctx.svc.cerrar(deposito, id, {
+      loteCodigo: 'RL-1',
       ubicacionDestinoBueno: '  A-01  ',
       ubicacionDestinoMalo: '   ',
     });
@@ -659,39 +678,15 @@ describe('AutorizacionService — máquina de estados', () => {
     // Recepción con observación previa (bultos difieren).
     await ctx.svc.recibir(deposito, id, { bultosRecibidos: 1, observaciones: 'faltó un bulto' });
     await ctx.svc.ingreso(deposito, id, { ubicacionEspera: 'DEV-01' });
-    await ctx.svc.controlarBulto(deposito, id, 1, {
-      peso: 7, // declarado: 10
-      controles: [{ isbn: ISBN_A, cantidad: 2 }],
-    });
+    await ctx.svc.controlarBulto(deposito, id, 1, { peso: 7 }); // declarado: 10
     await expect(
-      ctx.svc.cerrar(deposito, id, { ubicacionDestinoBueno: 'A-01', ubicacionDestinoMalo: 'DAN-01' }),
+      ctx.svc.cerrar(deposito, id, { loteCodigo: 'RL-1' }),
     ).rejects.toThrow(/observación obligatoria/);
     const r = await ctx.svc.cerrar(deposito, id, {
-      ubicacionDestinoBueno: 'A-01',
-      ubicacionDestinoMalo: 'DAN-01',
+      loteCodigo: 'RL-1',
       observaciones: 'peso menor: faltó un bulto',
     });
     expect(r.autorizacion.estado).toBe(DevEstado.PROCESADO);
-  });
-
-  it('rechaza ISBN no catalogado en el control', async () => {
-    const ctx = crearServicio();
-    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
-    await expect(
-      ctx.svc.controlarBulto(deposito, id, 1, {
-        controles: [{ isbn: ISBN_NO_CATALOGADO, cantidad: 1 }],
-      }),
-    ).rejects.toThrow(/no catalogados/);
-  });
-
-  it('mal estado no puede superar la cantidad', async () => {
-    const ctx = crearServicio();
-    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
-    await expect(
-      ctx.svc.controlarBulto(deposito, id, 1, {
-        controles: [{ isbn: ISBN_A, cantidad: 1, malEstado: 2 }],
-      }),
-    ).rejects.toThrow(/mal estado/);
   });
 });
 
@@ -755,13 +750,13 @@ describe('AutorizacionService — circuito completo (criterio de validación)', 
       'Libro C',
     ]);
 
-    // Reconciliación por ISBN sobre TODOS los bultos (B estaba mezclado en 2).
-    // Orden: por ISBN ascendente (C < A < B numéricamente).
-    const rec = await ctx.svc.calcularReconciliacion(id, 10);
+    // Reconciliación por ISBN: declarado (WMS) vs lote del ERP (Fierro). El lote
+    // RL-1 matchea lo declarado → diferencia 0. Orden por ISBN ascendente (C<A<B).
+    const rec = await ctx.svc.calcularReconciliacion(id, 'RL-1');
     expect(rec).toEqual([
-      { isbn: ISBN_C, productoId: 3, titulo: 'Libro C', declarado: 5, recibido: 5, bueno: 4, malo: 1, saldoConsignacion: 5, excedeConsignacion: false },
-      { isbn: ISBN_A, productoId: 1, titulo: 'Libro A', declarado: 2, recibido: 2, bueno: 2, malo: 0, saldoConsignacion: 2, excedeConsignacion: false },
-      { isbn: ISBN_B, productoId: 2, titulo: 'Libro B', declarado: 3, recibido: 3, bueno: 3, malo: 0, saldoConsignacion: 3, excedeConsignacion: false },
+      { isbn: ISBN_C, productoId: 3, titulo: 'Libro C', declarado: 5, cantidadFierro: 5, diferencia: 0 },
+      { isbn: ISBN_A, productoId: 1, titulo: 'Libro A', declarado: 2, cantidadFierro: 2, diferencia: 0 },
+      { isbn: ISBN_B, productoId: 2, titulo: 'Libro B', declarado: 3, cantidadFierro: 3, diferencia: 0 },
     ]);
 
     // Eventos: 5 transiciones + devolucion.procesada con la reconciliación.
@@ -791,25 +786,22 @@ describe('AutorizacionService — corrección post-Procesado', () => {
     const ctx = crearServicio();
     const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
     await expect(
-      ctx.svc.corregirControl(admin, id, 1, { controles: [{ isbn: ISBN_A, cantidad: 1 }] }),
+      ctx.svc.corregirControl(admin, id, 1, { peso: 5 }),
     ).rejects.toThrow(/Transición inválida/);
   });
 
-  it('reemplaza el control, queda en auditoría y re-emite devolucion.procesada con correccion=true', async () => {
+  it('re-pesa el bulto, queda en auditoría y re-emite devolucion.procesada con correccion=true', async () => {
     const ctx = crearServicio();
     const id = await avanzarHasta(ctx, DevEstado.PROCESADO);
 
     const r = await ctx.svc.corregirControl(admin, id, 2, {
-      peso: 4,
-      observaciones: 'error de tipeo: eran 2 en mal estado',
-      controles: [
-        { isbn: ISBN_B, cantidad: 2 },
-        { isbn: ISBN_C, cantidad: 5, malEstado: 2 },
-      ],
+      peso: 5,
+      observaciones: 'error de tipeo en el peso del bulto',
     });
 
+    // La reconciliación sale del lote vs declarado (no del peso): sigue dando 0.
     const lineaC = r.reconciliacion.find((l) => l.isbn === ISBN_C);
-    expect(lineaC).toMatchObject({ recibido: 5, bueno: 3, malo: 2 });
+    expect(lineaC).toMatchObject({ declarado: 5, cantidadFierro: 5, diferencia: 0 });
     // Sigue Procesado: no se reabre.
     expect(r.autorizacion.estado).toBe(DevEstado.PROCESADO);
     expect(r.autorizacion.observaciones).toContain('Corrección bulto 2');
@@ -823,74 +815,125 @@ describe('AutorizacionService — corrección post-Procesado', () => {
   });
 });
 
-describe('AutorizacionService — saldo en consignación', () => {
-  // Controla los 2 bultos (mismo reparto que el circuito feliz): recibido por
-  // ISBN → A=2, B=3, C=5 (1 de C en mal estado).
-  async function controlarAmbos(ctx: ReturnType<typeof crearServicio>, id: number) {
-    await ctx.svc.controlarBulto(deposito, id, 1, {
-      peso: 6,
-      controles: [
-        { isbn: ISBN_A, cantidad: 2 },
-        { isbn: ISBN_B, cantidad: 1 },
-      ],
-    });
-    await ctx.svc.controlarBulto(deposito, id, 2, {
-      peso: 4,
-      controles: [
-        { isbn: ISBN_B, cantidad: 2 },
-        { isbn: ISBN_C, cantidad: 5, malEstado: 1 },
-      ],
-    });
-  }
-
-  it('la reconciliación trae el saldo y marca el exceso por ISBN', async () => {
+describe('AutorizacionService — reconciliación contra el lote del ERP', () => {
+  it('marca faltante/sobrante por ISBN comparando declarado vs lote Fierro', async () => {
     const ctx = crearServicio();
     const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
-    await controlarAmbos(ctx, id);
-    // avanzarHasta dejó A=2, B=3, C=5; sobreescribimos para forzar el exceso.
-    ctx.consignacion.set(10, ISBN_A, 5); // recibido 2 < 5 → no excede
-    ctx.consignacion.set(10, ISBN_C, 3); // recibido 5 > 3 → excede
+    // Lote del ERP con cantidades distintas a lo declarado (A=2,B=3,C=5):
+    // A: Fierro 2 → diferencia 0; B: Fierro 5 → faltante (declaró 3, -2);
+    // C: ausente del lote → cantidadFierro null, diferencia null.
+    ctx.db.lotes.push({
+      id: 200,
+      codigo: 'RL-2',
+      nroCliente: 'C-10',
+      items: [
+        { isbn: ISBN_A, cantidad: 2, titulo: 'Libro A' },
+        { isbn: ISBN_B, cantidad: 5, titulo: 'Libro B' },
+      ],
+    } as never);
 
-    const rec = await ctx.svc.calcularReconciliacion(id, 10);
+    const rec = await ctx.svc.calcularReconciliacion(id, 'RL-2');
     const a = rec.find((l) => l.isbn === ISBN_A)!;
     const b = rec.find((l) => l.isbn === ISBN_B)!;
     const c = rec.find((l) => l.isbn === ISBN_C)!;
-    expect(a).toMatchObject({ saldoConsignacion: 5, excedeConsignacion: false });
-    expect(b).toMatchObject({ saldoConsignacion: 3, excedeConsignacion: false }); // recibido 3 == 3
-    expect(c).toMatchObject({ saldoConsignacion: 3, excedeConsignacion: true });
+    expect(a).toMatchObject({ declarado: 2, cantidadFierro: 2, diferencia: 0 });
+    expect(b).toMatchObject({ declarado: 3, cantidadFierro: 5, diferencia: -2 });
+    expect(c).toMatchObject({ declarado: 5, cantidadFierro: null, diferencia: null });
   });
 
-  it('cerrar con exceso NO bloquea pero exige observación', async () => {
+  it('sin lote (todavía no cerrada), la reconciliación muestra solo lo declarado', async () => {
     const ctx = crearServicio();
     const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
-    await controlarAmbos(ctx, id);
-    ctx.consignacion.set(10, ISBN_A, 1); // recibido 2 > 1 → excede
+    const rec = await ctx.svc.calcularReconciliacion(id, null);
+    expect(rec.every((l) => l.cantidadFierro === null && l.diferencia === null)).toBe(true);
+    expect(rec.find((l) => l.isbn === ISBN_A)!.declarado).toBe(2);
+  });
 
+  it('rechaza cerrar con un lote de otro cliente', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
+    await ctx.svc.controlarBulto(deposito, id, 1, { peso: 6 });
+    await ctx.svc.controlarBulto(deposito, id, 2, { peso: 4 });
+    ctx.db.lotes.push({ id: 300, codigo: 'RL-AJENO', nroCliente: 'C-11', items: [] } as never);
     await expect(
-      ctx.svc.cerrar(deposito, id, { ubicacionDestinoBueno: 'A-01', ubicacionDestinoMalo: 'DAN-01' }),
-    ).rejects.toThrow(BadRequestException);
+      ctx.svc.cerrar(deposito, id, { loteCodigo: 'RL-AJENO' }),
+    ).rejects.toThrow(/es del cliente/);
+  });
+});
 
-    const r = await ctx.svc.cerrar(deposito, id, {
-      ubicacionDestinoBueno: 'A-01',
-      ubicacionDestinoMalo: 'DAN-01',
-      observaciones: 'cliente devolvió más de lo que tenía en consignación',
-    });
-    expect(r.autorizacion.estado).toBe(DevEstado.PROCESADO);
-    const procesada = ctx.eventos.emitidos.find(([n]) => n === DEVOLUCION_PROCESADA);
-    expect(procesada![1].reconciliacion.find((l: any) => l.isbn === ISBN_A).excedeConsignacion).toBe(true);
+describe('AutorizacionService — asignación de lote + chequeo periódico', () => {
+  it('asignarLote: solo en estados despachado-sin-procesar y valida el lote', async () => {
+    const ctx = crearServicio();
+    const aprob = await avanzarHasta(ctx, DevEstado.APROBADO);
+    await expect(ctx.svc.asignarLote(deposito, aprob, 'RL-1')).rejects.toThrow(/despachada/);
+    const id = await avanzarHasta(ctx, DevEstado.ENTREGADO);
+    const det = await ctx.svc.asignarLote(deposito, id, 'RL-1');
+    expect(det.loteCodigo).toBe('RL-1');
+    await expect(ctx.svc.asignarLote(deposito, id, 'NO-EXISTE')).rejects.toThrow(/no encontrado/);
   });
 
-  it('recibido dentro del saldo no marca exceso ni bloquea el cierre', async () => {
+  it('cierra usando el lote ya asignado si no se pasa en el cierre', async () => {
     const ctx = crearServicio();
     const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
-    await controlarAmbos(ctx, id);
-    // Saldo sembrado por avanzarHasta == recibido (A=2, B=3, C=5): nadie excede.
-    const r = await ctx.svc.cerrar(deposito, id, {
-      ubicacionDestinoBueno: 'A-01',
-      ubicacionDestinoMalo: 'DAN-01',
-    });
+    await ctx.svc.asignarLote(deposito, id, 'RL-1');
+    await ctx.svc.controlarBulto(deposito, id, 1, { peso: 6 });
+    await ctx.svc.controlarBulto(deposito, id, 2, { peso: 4 });
+    const r = await ctx.svc.cerrar(deposito, id, {}); // sin loteCodigo en el DTO
     expect(r.autorizacion.estado).toBe(DevEstado.PROCESADO);
-    expect(r.reconciliacion.every((l) => !l.excedeConsignacion)).toBe(true);
+    expect(r.autorizacion.loteCodigo).toBe('RL-1');
+  });
+
+  it('evaluarLotesPendientes emite devolucion.lote_evaluado solo si la firma cambió', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
+    await ctx.svc.asignarLote(deposito, id, 'RL-1');
+
+    const r1 = await ctx.svc.evaluarLotesPendientes();
+    expect(r1).toMatchObject({ evaluadas: 1, notificadas: 1 });
+    const ev = ctx.eventos.emitidos.filter(([n]) => n === DEVOLUCION_LOTE_EVALUADO);
+    expect(ev).toHaveLength(1);
+    expect(ev[0][1]).toMatchObject({ loteCodigo: 'RL-1', hayDiferencias: false });
+
+    // Segunda corrida sin cambios: no re-emite (dedup por firma).
+    const r2 = await ctx.svc.evaluarLotesPendientes();
+    expect(r2.notificadas).toBe(0);
+    expect(ctx.eventos.emitidos.filter(([n]) => n === DEVOLUCION_LOTE_EVALUADO)).toHaveLength(1);
+  });
+
+  it('no evalúa devoluciones sin lote asignado', async () => {
+    const ctx = crearServicio();
+    await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO); // sin asignar lote
+    const r = await ctx.svc.evaluarLotesPendientes();
+    expect(r.evaluadas).toBe(0);
+  });
+
+  it('hayDiferencias=true si el cliente declaró un ISBN que no está en el lote', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
+    // Lote sin ISBN_C (el cliente declaró 5 de C).
+    ctx.db.lotes.push({
+      id: 400,
+      codigo: 'RL-SINC',
+      nroCliente: 'C-10',
+      items: [
+        { isbn: ISBN_A, cantidad: 2, titulo: 'Libro A' },
+        { isbn: ISBN_B, cantidad: 3, titulo: 'Libro B' },
+      ],
+    } as never);
+    await ctx.svc.asignarLote(deposito, id, 'RL-SINC');
+    const r = await ctx.svc.evaluarLotesPendientes();
+    expect(r.notificadas).toBe(1);
+    const ev = ctx.eventos.emitidos.filter(([n]) => n === DEVOLUCION_LOTE_EVALUADO);
+    expect(ev[ev.length - 1][1].hayDiferencias).toBe(true);
+  });
+
+  it('reasignar el mismo lote no fuerza un nuevo aviso', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.INGRESO_DEPOSITO);
+    await ctx.svc.asignarLote(deposito, id, 'RL-1');
+    expect((await ctx.svc.evaluarLotesPendientes()).notificadas).toBe(1);
+    await ctx.svc.asignarLote(deposito, id, 'RL-1'); // mismo lote → firma intacta
+    expect((await ctx.svc.evaluarLotesPendientes()).notificadas).toBe(0);
   });
 });
 
