@@ -120,6 +120,21 @@ function crearFakePrisma() {
         Object.assign(a, data);
         return { ...a };
       },
+      // Concurrencia optimista de transicionar(): where {id, estado}.
+      updateMany: async ({ where, data }: any) => {
+        const a = db.autorizaciones.find(
+          (x: any) =>
+            x.id === where.id && (where.estado === undefined || x.estado === where.estado),
+        );
+        if (!a) return { count: 0 };
+        Object.assign(a, data);
+        return { count: 1 };
+      },
+      findUniqueOrThrow: async ({ where }: any) => {
+        const a = db.autorizaciones.find((x) => x.id === where.id);
+        if (!a) throw new Error('autorización inexistente');
+        return { ...a };
+      },
       findMany: async ({ where = {} }: any) =>
         db.autorizaciones
           .filter((a: any) => {
@@ -306,16 +321,26 @@ function crearFakePrisma() {
 }
 
 // ---- stubs de core ----
-const CATALOGO: Record<string, { id: number; titulo: string }> = {
+// ISBN_C además tiene código interno de Fierro 'F-C' (para probar el import por
+// código de Fierro en el importador de artículos del cliente).
+const CATALOGO: Record<string, { id: number; titulo: string; codigoFierro?: string }> = {
   [ISBN_A]: { id: 1, titulo: 'Libro A' },
   [ISBN_B]: { id: 2, titulo: 'Libro B' },
-  [ISBN_C]: { id: 3, titulo: 'Libro C' },
+  [ISBN_C]: { id: 3, titulo: 'Libro C', codigoFierro: 'F-C' },
 };
+// Índice inverso código Fierro (MAYÚSCULAS) → ISBN, para el
+// resolverPorCodigoFierroBatch falso (match case-insensitive, como MySQL).
+const ISBN_POR_FIERRO: Record<string, string> = {};
+for (const [isbn, p] of Object.entries(CATALOGO)) {
+  if (p.codigoFierro) ISBN_POR_FIERRO[p.codigoFierro.toUpperCase()] = isbn;
+}
 
 function crearServicio() {
   const { prisma, db } = crearFakePrisma();
   const resolverUno = (isbn: string) =>
-    CATALOGO[isbn] ? { ...CATALOGO[isbn], codigoInterno: `P-${CATALOGO[isbn].id}`, editorial: null, imagenUrl: null, isbn } : null;
+    CATALOGO[isbn]
+      ? { ...CATALOGO[isbn], codigoInterno: `P-${CATALOGO[isbn].id}`, codigoFierro: CATALOGO[isbn].codigoFierro ?? null, editorial: null, imagenUrl: null, isbn }
+      : null;
   const catalogo = {
     resolverPorIsbnOpcional: async (isbn: string) => resolverUno(isbn),
     resolverPorIsbnBatch: async (isbns: string[]) => {
@@ -323,6 +348,25 @@ function crearServicio() {
       for (const isbn of isbns) {
         const p = resolverUno(isbn);
         if (p) m.set(isbn, p);
+      }
+      return m;
+    },
+    resolverPorCodigoFierroBatch: async (codigos: string[]) => {
+      const m = new Map<string, Record<string, unknown>>();
+      for (const c of codigos) {
+        const clave = c?.trim().toUpperCase();
+        const isbn = clave ? ISBN_POR_FIERRO[clave] : undefined;
+        if (!isbn) continue;
+        const p = CATALOGO[isbn];
+        m.set(clave, {
+          id: p.id,
+          codigoInterno: `P-${p.id}`,
+          codigoFierro: clave,
+          titulo: p.titulo,
+          editorial: null,
+          imagenUrl: null,
+          isbnCanonico: isbn,
+        });
       }
       return m;
     },
@@ -1113,25 +1157,69 @@ describe('AutorizacionService — importación de líneas desde Excel/CSV', () =
     ]);
   });
 
-  it('reporta filas con error: ISBN inválido, cantidad inválida y no catalogado', async () => {
+  it('reporta filas con error: identificador no resoluble, cantidad inválida y no catalogado', async () => {
     const ctx = crearServicio();
     const id = await avanzarHasta(ctx, DevEstado.APROBADO);
     const buf = await xlsx([
       ['ISBN', 'Cantidad'],
-      ['no-es-isbn', 1], // ISBN inválido
+      ['no-es-isbn', 1], // ni ISBN válido ni código Fierro conocido
       [ISBN_A, 0], // cantidad < 1
-      [ISBN_NO_CATALOGADO, 2], // válido pero fuera del catálogo
+      [ISBN_NO_CATALOGADO, 2], // ISBN válido pero fuera del catálogo
       [ISBN_B, 1], // OK
     ]);
     const prev = await ctx.svc.previsualizarImportacion(clienteX, id, archivo(buf), {});
     expect(prev.resultado!.lineas).toEqual([
-      expect.objectContaining({ isbn: ISBN_B, cantidad: 1 }),
+      expect.objectContaining({ isbn: ISBN_B, cantidad: 1, via: 'isbn' }),
     ]);
     const motivos = prev.resultado!.errores.map((e) => e.motivo);
     expect(motivos).toEqual([
-      expect.stringContaining('ISBN inválido'),
+      expect.stringContaining('No catalogado'),
       expect.stringContaining('Cantidad inválida'),
-      expect.stringContaining('no catalogado'),
+      expect.stringContaining('No catalogado'),
+    ]);
+  });
+
+  it('importa por código de Fierro cuando el identificador no es un ISBN (via=fierro, se declara por su ISBN)', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    const buf = await xlsx([
+      ['Codigo', 'Cantidad'],
+      ['F-C', 3], // código de Fierro de ISBN_C
+    ]);
+    const prev = await ctx.svc.previsualizarImportacion(clienteX, id, archivo(buf), {});
+    // La línea viaja por el ISBN canónico del producto (ISBN_C), no por 'F-C'.
+    expect(prev.resultado!.lineas).toEqual([
+      expect.objectContaining({ isbn: ISBN_C, cantidad: 3, titulo: 'Libro C', via: 'fierro' }),
+    ]);
+    expect(prev.resultado!.errores).toHaveLength(0);
+  });
+
+  it('matchea el código de Fierro sin importar mayúsculas/minúsculas', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    const buf = await xlsx([
+      ['Codigo', 'Cantidad'],
+      ['f-c', 4], // mismo código 'F-C' en minúsculas
+    ]);
+    const prev = await ctx.svc.previsualizarImportacion(clienteX, id, archivo(buf), {});
+    expect(prev.resultado!.lineas).toEqual([
+      expect.objectContaining({ isbn: ISBN_C, cantidad: 4, via: 'fierro' }),
+    ]);
+    expect(prev.resultado!.errores).toHaveLength(0);
+  });
+
+  it('ISBN es la identidad principal: mezcla ISBN + código Fierro del mismo producto y suma por ISBN', async () => {
+    const ctx = crearServicio();
+    const id = await avanzarHasta(ctx, DevEstado.APROBADO);
+    const buf = await xlsx([
+      ['Codigo', 'Cantidad'],
+      [ISBN_C, 2], // por ISBN
+      ['F-C', 5], // el mismo producto, por código Fierro
+    ]);
+    const prev = await ctx.svc.previsualizarImportacion(clienteX, id, archivo(buf), {});
+    // Una sola línea (mismo producto), cantidad sumada, marcada como ISBN (principal).
+    expect(prev.resultado!.lineas).toEqual([
+      expect.objectContaining({ isbn: ISBN_C, cantidad: 7, via: 'isbn' }),
     ]);
   });
 

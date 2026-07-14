@@ -6,6 +6,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
   MinLength,
@@ -31,6 +32,7 @@ export class CrearAutorizacionDto {
   /** Cantidad de unidades (libros) a devolver, declarada al crear. Obligatoria. */
   @IsInt()
   @Min(1)
+  @Max(10_000_000)
   cantidadUnidades!: number;
 
   @IsOptional()
@@ -63,11 +65,13 @@ export class DeclararDto {
   @IsOptional()
   @IsInt()
   @Min(1)
+  @Max(100_000)
   bultosDeclarados?: number;
 
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(1_000_000)
   pesoTotalDeclarado?: number;
 
   @IsOptional()

@@ -354,7 +354,7 @@ function PanelDeclaracion({ d, onDone, onError }: { d: Detalle; onDone: () => vo
 }
 
 interface ColumnaArchivo { indice: number; encabezado: string; ejemplo: string | null }
-interface LineaImportada { isbn: string; cantidad: number; productoId: number | null; titulo: string | null; editorial: string | null; imagenUrl: string | null }
+interface LineaImportada { isbn: string; cantidad: number; productoId: number | null; titulo: string | null; editorial: string | null; imagenUrl: string | null; via: 'isbn' | 'fierro' }
 interface ErrorImportacion { fila: number; isbn: string | null; cantidad: string | null; motivo: string }
 interface PreviewImportacion {
   columnas: ColumnaArchivo[];
@@ -364,8 +364,10 @@ interface PreviewImportacion {
 
 /**
  * Importación de líneas desde un Excel/CSV (cliente que procesó la devolución en
- * otro sistema). Flujo: subir archivo → elegir columna de ISBN y de cantidad
- * (con auto-detección) → revisar qué libros/cantidades se importan → aceptar.
+ * otro sistema). Flujo: subir archivo → elegir columna del identificador (ISBN o
+ * Cód. Fierro) y de cantidad (con auto-detección) → revisar qué libros/cantidades
+ * se importan → aceptar. El ISBN es la identidad principal; si una fila no matchea
+ * por ISBN, se intenta por código de Fierro (ERP).
  * El backend NO persiste: solo previsualiza. Al aceptar, las líneas se cargan en
  * la declaración editable y recién se confirman al guardar/despachar.
  */
@@ -449,7 +451,9 @@ function ImportarExcel({ autorizacionId, onImportar, onError, onClose }: {
       </div>
       <p className="text-xs text-slate-500 mb-3">
         Subí el archivo (.xlsx o .csv) que exportaste de tu sistema y elegí en qué columna está el
-        ISBN y en cuál la cantidad. Vas a poder revisar qué se importa antes de aceptarlo.
+        identificador (ISBN o código de Fierro) y en cuál la cantidad. Se prioriza el ISBN; si una
+        fila no matchea por ISBN, se busca por código de Fierro. Vas a poder revisar qué se importa
+        antes de aceptarlo.
       </p>
 
       <label className="inline-flex items-center gap-2 cursor-pointer btn-outline !py-1.5 text-sm">
@@ -470,7 +474,7 @@ function ImportarExcel({ autorizacionId, onImportar, onError, onClose }: {
             La primera fila es un encabezado (títulos de columna)
           </label>
           <div className="grid sm:grid-cols-2 gap-3">
-            <Field label="Columna del ISBN">
+            <Field label="Columna de ISBN o Cód. Fierro">
               <select className="input" value={isbnCol} onChange={(e) => setIsbnCol(e.target.value)}>
                 <option value="">Elegir…</option>
                 {columnas.map((c) => <option key={c.indice} value={c.indice}>{opcionCol(c)}</option>)}
@@ -505,7 +509,14 @@ function ImportarExcel({ autorizacionId, onImportar, onError, onClose }: {
                   <ProductoThumb producto={{ isbn: l.isbn, titulo: l.titulo ?? l.isbn, editorial: l.editorial, imagenUrl: l.imagenUrl }} size={32} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate">{l.titulo ?? l.isbn}</span>
-                    <span className="block truncate text-xs text-slate-400 tabnum">{l.isbn}</span>
+                    <span className="flex items-center gap-1.5 text-xs text-slate-400">
+                      <span className="truncate tabnum">{l.isbn}</span>
+                      {l.via === 'fierro' && (
+                        <span className="shrink-0 rounded bg-brand-green-ink/10 px-1.5 py-0.5 text-[10px] font-medium text-brand-green-ink" title="Identificado por código de Fierro; se declara por su ISBN">
+                          vía Fierro
+                        </span>
+                      )}
+                    </span>
                   </span>
                   <span className="tabnum font-medium">{l.cantidad}</span>
                 </div>

@@ -12,7 +12,10 @@ import { DevEstado, DevEstadoControl, DevExcepcionEstado, Prisma } from '@prisma
 import { Workbook } from 'exceljs';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditoriaService } from '../../core/auditoria/auditoria.service';
-import { CatalogoService } from '../../core/catalogo/catalogo.service';
+import {
+  CatalogoService,
+  normalizarCodigoFierro,
+} from '../../core/catalogo/catalogo.service';
 import { normalizarIsbn } from '../../core/catalogo/isbn.util';
 import type { JwtPayload } from '../../core/auth/jwt-payload';
 import {
@@ -73,6 +76,9 @@ export interface LineaImportada {
   titulo: string | null;
   editorial: string | null;
   imagenUrl: string | null;
+  // Cómo se identificó el producto en el archivo: por ISBN (principal) o por el
+  // código interno de Fierro (alternativa). Informativo para el cliente.
+  via: 'isbn' | 'fierro';
 }
 
 export interface ErrorImportacion {
@@ -100,6 +106,19 @@ export interface PreviewImportacion {
  * (string, número, fecha, fórmula, hyperlink, rich text). Los números se pasan
  * por `String` para NO perder dígitos del EAN-13 (un ISBN cargado como número).
  */
+/**
+ * Neutraliza inyección de fórmulas en Excel/CSV: una celda de texto que empieza
+ * con = + - @ (o tab/CR) se evalúa como fórmula al abrir el archivo. Se le
+ * antepone un apóstrofo para forzar que Excel la trate como texto literal.
+ * Aplica a TODO dato de texto de origen externo (cliente, ERP, catálogo).
+ */
+function celdaSegura<T>(value: T): T | string {
+  if (typeof value === 'string' && /^[=+\-@\t\r]/.test(value)) {
+    return `'${value}`;
+  }
+  return value;
+}
+
 function celdaTexto(value: unknown): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value.trim();
@@ -192,9 +211,20 @@ export class AutorizacionService {
     estadoNuevo: DevEstado,
     extra: Record<string, unknown> = {},
   ) {
-    const actualizada = await this.prisma.devAutorizacion.update({
-      where: { id },
+    // Update CONDICIONADO por el estado actual (concurrencia optimista): si otra
+    // operación (doble click, otro worker, el cron) ya transicionó, count=0 y se
+    // aborta — evita la doble transición y la doble emisión de eventos.
+    const { count } = await this.prisma.devAutorizacion.updateMany({
+      where: { id, estado: estadoAnterior },
       data: { estado: estadoNuevo, ...extra },
+    });
+    if (count === 0) {
+      throw new BadRequestException(
+        'La devolución ya cambió de estado; recargá y reintentá',
+      );
+    }
+    const actualizada = await this.prisma.devAutorizacion.findUniqueOrThrow({
+      where: { id },
     });
     await this.auditoria.registrar({
       actorId: actor.sub,
@@ -406,14 +436,17 @@ export class AutorizacionService {
   /**
    * Previsualiza una importación de líneas desde un Excel/CSV (cliente que procesó
    * la devolución en otro sistema). NO PERSISTE NADA: parsea el archivo, resuelve
-   * ISBN→producto y devuelve qué libros/cantidades se importarían y qué filas
-   * fallaron, para que el cliente lo revise y lo acepte antes de cargarlo en la
-   * declaración (la persistencia sigue pasando por declarar() → mismo gate y misma
-   * validación de consignación). Solo en estado APROBADO y sobre la propia
+   * cada artículo a producto —por **ISBN** (identidad principal) o, si no matchea,
+   * por su **código interno de Fierro** (ERP)— y devuelve qué libros/cantidades se
+   * importarían y qué filas fallaron, para que el cliente lo revise y lo acepte
+   * antes de cargarlo en la declaración (la persistencia sigue pasando por
+   * declarar() → mismo gate y misma validación de consignación; las líneas viajan
+   * por el ISBN canónico del producto). Solo en estado APROBADO y sobre la propia
    * devolución (un cliente no importa en la de otro).
    *
    * Si no se indica el mapeo de columnas, devuelve solo el listado de columnas
-   * (con auto-detección por encabezado) para que el cliente elija ISBN y cantidad.
+   * (con auto-detección por encabezado) para que el cliente elija la columna del
+   * identificador (ISBN o Cód. Fierro) y la de cantidad.
    */
   async previsualizarImportacion(
     actor: JwtPayload,
@@ -445,8 +478,12 @@ export class AutorizacionService {
     let cantidadCol = opts.cantidadCol ?? null;
     if (tieneEncabezado) {
       if (isbnCol === null) {
+        // La columna identificadora acepta ISBN (principal) o código de Fierro:
+        // se autodetecta por encabezados de cualquiera de los dos.
         isbnCol =
-          columnas.find((col) => /isbn|ean|c[oó]digo/i.test(col.encabezado))?.indice ?? null;
+          columnas.find((col) =>
+            /isbn|ean|c[oó]digo|fierro|art[ií]culo|sku/i.test(col.encabezado),
+          )?.indice ?? null;
       }
       if (cantidadCol === null) {
         // La cantidad nunca puede caer en la misma columna que el ISBN.
@@ -462,65 +499,110 @@ export class AutorizacionService {
     if (isbnCol === null || cantidadCol === null) {
       return { columnas, mapeo, resultado: null };
     }
-    // La misma columna para ISBN y cantidad daría líneas con el ISBN como cantidad.
+    // La misma columna para el identificador y la cantidad daría líneas con el
+    // código como cantidad.
     if (isbnCol === cantidadCol) {
-      throw new BadRequestException('La columna de ISBN y la de cantidad no pueden ser la misma');
+      throw new BadRequestException(
+        'La columna del identificador (ISBN o Cód. Fierro) y la de cantidad no pueden ser la misma',
+      );
     }
 
-    // Recorrido de filas de datos: junta candidatos y filas con error.
+    // Recorrido de filas de datos: junta candidatos y filas con error. El
+    // identificador se guarda CRUDO: puede ser un ISBN o un código de Fierro; la
+    // resolución (ISBN primero, Fierro como alternativa) se hace después en bloque.
     const ultimaFila = ws.rowCount;
     const topeFila = Math.min(ultimaFila, filaDatos + IMPORT_MAX_FILAS - 1);
     const truncado = ultimaFila > topeFila;
-    const candidatos: { fila: number; isbn: string; cantidad: number }[] = [];
+    const candidatos: { fila: number; ident: string; cantidad: number }[] = [];
     const errores: ErrorImportacion[] = [];
     let filasLeidas = 0;
 
     for (let r = filaDatos; r <= topeFila; r++) {
       const fila = ws.getRow(r);
-      const isbnRaw = celdaTexto(fila.getCell(isbnCol).value);
+      const identRaw = celdaTexto(fila.getCell(isbnCol).value);
       const cantRaw = celdaTexto(fila.getCell(cantidadCol).value);
-      if (!isbnRaw && !cantRaw) continue; // fila vacía: se ignora
+      if (!identRaw && !cantRaw) continue; // fila vacía: se ignora
       filasLeidas++;
 
-      const norm = normalizarIsbn(isbnRaw);
-      if (!norm) {
-        errores.push({ fila: r, isbn: isbnRaw || null, cantidad: cantRaw || null, motivo: 'ISBN inválido' });
+      if (!identRaw) {
+        errores.push({ fila: r, isbn: null, cantidad: cantRaw || null, motivo: 'Falta el ISBN o código de Fierro' });
         continue;
       }
       // Estricto: solo dígitos. Evita que separadores de miles/decimales se
       // malinterpreten en silencio (p.ej. "1.000" → 1 con Number()).
       if (!/^\d+$/.test(cantRaw)) {
-        errores.push({ fila: r, isbn: norm, cantidad: cantRaw || null, motivo: 'Cantidad inválida (debe ser un entero ≥ 1, sin separadores)' });
+        errores.push({ fila: r, isbn: identRaw, cantidad: cantRaw || null, motivo: 'Cantidad inválida (debe ser un entero ≥ 1, sin separadores)' });
         continue;
       }
       const cantidad = Number(cantRaw);
       if (cantidad < 1) {
-        errores.push({ fila: r, isbn: norm, cantidad: cantRaw || null, motivo: 'Cantidad inválida (debe ser ≥ 1)' });
+        errores.push({ fila: r, isbn: identRaw, cantidad: cantRaw || null, motivo: 'Cantidad inválida (debe ser ≥ 1)' });
         continue;
       }
-      candidatos.push({ fila: r, isbn: norm, cantidad });
+      candidatos.push({ fila: r, ident: identRaw, cantidad });
     }
 
-    // Resolución de catálogo en bloque (sin N+1); no catalogado → fila con error.
-    const productos = await this.catalogo.resolverPorIsbnBatch(candidatos.map((c) => c.isbn));
+    // Resolución en bloque (sin N+1), con el ISBN como identidad PRINCIPAL:
+    //  1) los identificadores que son ISBN válido y catalogado resuelven por ISBN;
+    //  2) el resto se intenta por código de Fierro (ERP).
+    // Las líneas viajan por el ISBN canónico del producto → declarar()/consignación
+    // no cambian.
+    const porIsbn = await this.catalogo.resolverPorIsbnBatch(
+      candidatos.map((c) => c.ident),
+    );
+    const restoParaFierro = candidatos.filter((c) => {
+      const norm = normalizarIsbn(c.ident);
+      return !norm || !porIsbn.has(norm);
+    });
+    const porFierro = await this.catalogo.resolverPorCodigoFierroBatch(
+      restoParaFierro.map((c) => c.ident),
+    );
+
     const lineas = new Map<string, LineaImportada>();
-    for (const cand of candidatos) {
-      const prod = productos.get(cand.isbn);
-      if (!prod) {
-        errores.push({ fila: cand.fila, isbn: cand.isbn, cantidad: String(cand.cantidad), motivo: 'ISBN no catalogado' });
-        continue;
-      }
-      const ya = lineas.get(cand.isbn);
-      if (ya) ya.cantidad += cand.cantidad;
-      else
-        lineas.set(cand.isbn, {
-          isbn: cand.isbn,
-          cantidad: cand.cantidad,
+    const acumular = (
+      isbn: string,
+      cantidad: number,
+      prod: { id: number; titulo: string; editorial: string | null; imagenUrl: string | null },
+      via: 'isbn' | 'fierro',
+    ) => {
+      const ya = lineas.get(isbn);
+      if (ya) {
+        ya.cantidad += cantidad;
+        // El ISBN es la vía principal: si alguna fila matcheó por ISBN, se muestra así.
+        if (via === 'isbn') ya.via = 'isbn';
+      } else {
+        lineas.set(isbn, {
+          isbn,
+          cantidad,
           productoId: prod.id,
           titulo: prod.titulo,
           editorial: prod.editorial,
           imagenUrl: prod.imagenUrl,
+          via,
         });
+      }
+    };
+
+    for (const cand of candidatos) {
+      const norm = normalizarIsbn(cand.ident);
+      const prod = norm ? porIsbn.get(norm) : undefined;
+      if (prod) {
+        acumular(norm!, cand.cantidad, prod, 'isbn');
+        continue;
+      }
+      // Match case-insensitive: el Map viene indexado en mayúsculas (el índice
+      // único de Fierro es case-insensitive en MySQL).
+      const claveFierro = normalizarCodigoFierro(cand.ident);
+      const pf = claveFierro ? porFierro.get(claveFierro.toUpperCase()) : undefined;
+      if (pf) {
+        if (!pf.isbnCanonico) {
+          errores.push({ fila: cand.fila, isbn: cand.ident, cantidad: String(cand.cantidad), motivo: `Código de Fierro ${cand.ident}: el producto no tiene ISBN asociado` });
+          continue;
+        }
+        acumular(pf.isbnCanonico, cand.cantidad, pf, 'fierro');
+        continue;
+      }
+      errores.push({ fila: cand.fila, isbn: cand.ident, cantidad: String(cand.cantidad), motivo: 'No catalogado (ni por ISBN ni por código de Fierro)' });
     }
 
     const lineasArr = [...lineas.values()];
@@ -991,11 +1073,11 @@ export class AutorizacionService {
             where: { id: a.clienteId },
             select: { nroCliente: true },
           });
-          // No se saltea con nroCliente vacío: en ese caso no se puede confirmar
-          // pertenencia → sigue en VALIDANDO (el operario debe corregir el lote).
-          if (cli && cli.nroCliente.trim() !== (lote.nroCliente ?? '').trim()) {
+          // No se auto-procesa si NO se puede confirmar pertenencia: cliente sin
+          // resolver (cli null) o nroCliente que no coincide → sigue en VALIDANDO.
+          if (!cli || cli.nroCliente.trim() !== (lote.nroCliente ?? '').trim()) {
             this.logger.warn(
-              `Devolución ${a.id}: el lote ${a.loteCodigo} no es del cliente; sigue en validación`,
+              `Devolución ${a.id}: no se pudo verificar que el lote ${a.loteCodigo} sea del cliente; sigue en validación`,
             );
             continue;
           }
@@ -1298,13 +1380,13 @@ export class AutorizacionService {
       hoja.addRow({
         id: i.id,
         estado: ESTADO_LABEL_EXPORT[i.estado],
-        nroCliente: i.cliente?.nroCliente ?? '',
-        cliente: i.cliente?.nombre ?? String(i.clienteId),
-        motivo: i.motivoId !== null ? (motivoMap.get(i.motivoId) ?? '') : '',
+        nroCliente: celdaSegura(i.cliente?.nroCliente ?? ''),
+        cliente: celdaSegura(i.cliente?.nombre ?? String(i.clienteId)),
+        motivo: celdaSegura(i.motivoId !== null ? (motivoMap.get(i.motivoId) ?? '') : ''),
         cantidadUnidades: i.cantidadUnidades ?? '',
         bultos: i.bultosDeclarados ?? '',
         peso: i.pesoTotalDeclarado !== null ? Number(i.pesoTotalDeclarado) : '',
-        transportista: i.transportistaId !== null ? (transpMap.get(i.transportistaId) ?? '') : '',
+        transportista: celdaSegura(i.transportistaId !== null ? (transpMap.get(i.transportistaId) ?? '') : ''),
         creada: i.createdAt,
         actualizada: i.updatedAt,
       });
@@ -1322,8 +1404,8 @@ export class AutorizacionService {
     for (const d of declaraciones) {
       det.addRow({
         autId: d.autorizacionId,
-        isbn: d.isbn,
-        titulo: d.productoId !== null ? (info.get(d.productoId)?.titulo ?? '') : '',
+        isbn: celdaSegura(d.isbn),
+        titulo: celdaSegura(d.productoId !== null ? (info.get(d.productoId)?.titulo ?? '') : ''),
         cantidad: d.cantidad,
       });
     }

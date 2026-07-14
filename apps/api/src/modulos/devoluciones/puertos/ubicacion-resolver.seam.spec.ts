@@ -54,8 +54,9 @@ describe('Seam UbicacionResolverPort en Devoluciones', () => {
             include ? { ...base, declaraciones: [], bultos: [], excepciones: [] } : base,
           ),
         ),
-        update: jest.fn().mockImplementation(({ data }: any) =>
-          Promise.resolve({ ...base, estado: DevEstado.PROCESADO, ...data }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn().mockImplementation(() =>
+          Promise.resolve({ ...base, estado: DevEstado.PROCESADO }),
         ),
       },
       devDeclaracion: { findMany: jest.fn().mockResolvedValue([]) },
@@ -82,7 +83,7 @@ describe('Seam UbicacionResolverPort en Devoluciones', () => {
       ubicacionDestinoBueno: 'A-01',
     });
     expect(r.autorizacion.estado).toBe(DevEstado.PROCESADO);
-    expect(prisma.devAutorizacion.update).toHaveBeenCalled();
+    expect(prisma.devAutorizacion.updateMany).toHaveBeenCalled();
   });
 
   it('rechaza un destino NO válido para "picking" (delegó en el puerto)', async () => {
@@ -93,6 +94,6 @@ describe('Seam UbicacionResolverPort en Devoluciones', () => {
         ubicacionDestinoBueno: 'DAN-01',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
-    expect(prisma.devAutorizacion.update).not.toHaveBeenCalled();
+    expect(prisma.devAutorizacion.updateMany).not.toHaveBeenCalled();
   });
 });

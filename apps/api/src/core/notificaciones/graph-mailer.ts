@@ -24,6 +24,8 @@ export interface MailMensaje {
 export class GraphMailer {
   private readonly logger = new Logger(GraphMailer.name);
   private token: { value: string; expiraEn: number } | null = null;
+  /** Solicitud de token en vuelo: dedup de pedidos concurrentes (evita ráfaga a Azure). */
+  private tokenInFlight: Promise<string> | null = null;
 
   /** true si hay credenciales O365 cargadas (si no, el envío queda inerte). */
   estaConfigurado(): boolean {
@@ -35,6 +37,15 @@ export class GraphMailer {
     if (this.token && this.token.expiraEn - 60_000 > Date.now()) {
       return this.token.value;
     }
+    // Si ya hay un pedido en curso, reusarlo en vez de disparar otro en paralelo.
+    if (this.tokenInFlight) return this.tokenInFlight;
+    this.tokenInFlight = this.pedirToken(cfg).finally(() => {
+      this.tokenInFlight = null;
+    });
+    return this.tokenInFlight;
+  }
+
+  private async pedirToken(cfg: O365Config): Promise<string> {
     const body = new URLSearchParams({
       grant_type: 'client_credentials',
       client_id: cfg.clientId,
