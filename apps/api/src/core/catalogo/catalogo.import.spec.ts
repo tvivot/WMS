@@ -15,6 +15,7 @@ const ISBN_A_CON_GUIONES = '978-0-306-40615-7'; // mismo que ISBN_A normalizado
 interface ProdRow {
   id: number;
   codigoInterno: string;
+  codigoFierro: string | null;
   titulo: string;
   editorial: string | null;
 }
@@ -72,21 +73,39 @@ function crearFakePrisma() {
         data,
         skipDuplicates,
       }: {
-        data: Omit<ProdRow, 'id'>[];
+        data: Partial<Omit<ProdRow, 'id'>> & { codigoInterno: string; titulo: string }[];
         skipDuplicates?: boolean;
       }) => {
         let count = 0;
-        for (const d of data) {
+        for (const d of data as unknown as Omit<ProdRow, 'id'>[]) {
           if (skipDuplicates && productos.some((x) => x.codigoInterno === d.codigoInterno)) continue;
-          productos.push({ id: seq++, ...d, editorial: d.editorial ?? null });
+          productos.push({
+            id: seq++,
+            ...d,
+            editorial: d.editorial ?? null,
+            codigoFierro: d.codigoFierro ?? null,
+          });
           count++;
         }
         return { count };
       },
-      findMany: async ({ where }: { where?: { codigoInterno?: { in?: string[] } } }) =>
+      findMany: async ({
+        where,
+      }: {
+        where?: { codigoInterno?: { in?: string[] }; codigoFierro?: { in?: string[] } };
+      }) =>
         productos
           .filter((p) => enLista(p.codigoInterno, where?.codigoInterno?.in))
-          .map((p) => ({ id: p.id, codigoInterno: p.codigoInterno })),
+          .filter(
+            (p) =>
+              !where?.codigoFierro?.in ||
+              (p.codigoFierro != null && where.codigoFierro.in.includes(p.codigoFierro)),
+          )
+          .map((p) => ({
+            id: p.id,
+            codigoInterno: p.codigoInterno,
+            codigoFierro: p.codigoFierro ?? null,
+          })),
     },
     _state: { productos, isbns },
   };
@@ -137,6 +156,7 @@ describe('CatalogoService.importarProductos', () => {
     prisma._state.productos.push({
       id: 99,
       codigoInterno: ISBN_A,
+      codigoFierro: null,
       titulo: 'Viejo',
       editorial: null,
     });
@@ -152,6 +172,86 @@ describe('CatalogoService.importarProductos', () => {
     expect(prisma._state.productos).toHaveLength(2);
     // El ISBN_A suelto queda igualmente vinculado a su producto preexistente.
     expect(prisma._state.isbns.map((i) => i.isbn).sort()).toEqual([ISBN_A, ISBN_B].sort());
+  });
+
+  it('guarda el código Fierro al crear y lo actualiza al reenviar', async () => {
+    const prisma = crearFakePrisma();
+    const svc = new CatalogoService(prisma);
+
+    await svc.importarProductos([{ isbn: ISBN_A, titulo: 'Libro A', codigoFierro: 'F-100' }]);
+    expect(prisma._state.productos[0].codigoFierro).toBe('F-100');
+
+    const r = await svc.importarProductos([
+      { isbn: ISBN_A, titulo: 'Libro A', codigoFierro: 'F-200' },
+    ]);
+    expect(r).toEqual({ recibidos: 1, creados: 0, actualizados: 1, errores: [] });
+    expect(prisma._state.productos[0].codigoFierro).toBe('F-200');
+  });
+
+  it('código Fierro en blanco queda en null (no reserva el índice único)', async () => {
+    const prisma = crearFakePrisma();
+    const svc = new CatalogoService(prisma);
+
+    await svc.importarProductos([
+      { isbn: ISBN_A, titulo: 'Libro A', codigoFierro: '  ' },
+      { isbn: ISBN_B, titulo: 'Libro B', codigoFierro: '   ' },
+    ]);
+    expect(prisma._state.productos.every((p) => p.codigoFierro === null)).toBe(true);
+  });
+
+  it('código Fierro duplicado en el lote: gana el último, el resto se informa', async () => {
+    const prisma = crearFakePrisma();
+    const svc = new CatalogoService(prisma);
+
+    const r = await svc.importarProductos([
+      { isbn: ISBN_A, titulo: 'Libro A', codigoFierro: 'F-1' },
+      { isbn: ISBN_B, titulo: 'Libro B', codigoFierro: 'F-1' },
+    ]);
+
+    // Ambos se crean (título/editorial se aplican), pero solo el último conserva F-1.
+    expect(r.creados).toBe(2);
+    expect(r.errores).toEqual([
+      { isbn: ISBN_A, error: 'Código Fierro "F-1" duplicado en el lote' },
+    ]);
+    const porCodigoInterno = new Map(prisma._state.productos.map((p) => [p.codigoInterno, p]));
+    expect(porCodigoInterno.get(ISBN_A)!.codigoFierro).toBeNull();
+    expect(porCodigoInterno.get(ISBN_B)!.codigoFierro).toBe('F-1');
+  });
+
+  it('código Fierro ya asignado a otro producto: se descarta y se informa', async () => {
+    const prisma = crearFakePrisma();
+    // ISBN_A ya existe con F-9 asignado.
+    await new CatalogoService(prisma).importarProductos([
+      { isbn: ISBN_A, titulo: 'Libro A', codigoFierro: 'F-9' },
+    ]);
+    const svc = new CatalogoService(prisma);
+
+    // ISBN_B (producto distinto) intenta tomar el mismo F-9.
+    const r = await svc.importarProductos([
+      { isbn: ISBN_B, titulo: 'Libro B', codigoFierro: 'F-9' },
+    ]);
+
+    expect(r.creados).toBe(1);
+    expect(r.errores).toEqual([
+      { isbn: ISBN_B, error: 'Código Fierro "F-9" ya asignado a otro producto' },
+    ]);
+    const porCodigoInterno = new Map(prisma._state.productos.map((p) => [p.codigoInterno, p]));
+    expect(porCodigoInterno.get(ISBN_A)!.codigoFierro).toBe('F-9'); // intacto
+    expect(porCodigoInterno.get(ISBN_B)!.codigoFierro).toBeNull();
+  });
+
+  it('reenviar el mismo producto con su propio código Fierro NO es colisión', async () => {
+    const prisma = crearFakePrisma();
+    const svc = new CatalogoService(prisma);
+
+    await svc.importarProductos([{ isbn: ISBN_A, titulo: 'Libro A', codigoFierro: 'F-7' }]);
+    const r = await svc.importarProductos([
+      { isbn: ISBN_A, titulo: 'Libro A (v2)', codigoFierro: 'F-7' },
+    ]);
+
+    expect(r.errores).toEqual([]);
+    expect(prisma._state.productos[0].codigoFierro).toBe('F-7');
+    expect(prisma._state.productos[0].titulo).toBe('Libro A (v2)');
   });
 
   it('una fila con ISBN inválido no aborta el lote', async () => {

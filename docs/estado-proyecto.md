@@ -122,6 +122,20 @@ Cambio de fondo en el cierre de devoluciones (decidido con el usuario):
 - **Migraciones pendientes de deploy:** `20260625130000_dev_lote`, `20260625140000_dev_autorizacion_lote`, `20260630120000_dev_lote_validacion`.
 - **Follow-up:** el KPI de informes "calidad de libros (bueno/malo)" leía `dev_control`; deja de poblarse desde acá (va al otro proceso). No rompe; reformular cuando exista ese proceso.
 
+## Código interno de Fierro (ERP) en el catálogo — 2026-07-14
+
+Nuevo atributo del producto para mapearlo con su ficha en el ERP Fierro (base para matcheo de lotes y export de devoluciones), **distinto** del `codigoInterno`/ISBN maestro del WMS.
+
+- **DB:** `core_producto.codigo_fierro` `VARCHAR(60) NULL` **@unique** (MySQL admite múltiples NULL). Migración `20260714120000_producto_codigo_fierro` — **pendiente de deploy** (corre con `prisma migrate deploy` al arrancar).
+- **API integrador:** `POST /api/catalogo/productos/import` acepta `codigoFierro?` opcional por producto (idem `/bulk` y `POST/PUT` manual). Manual **v1.1** (`docs/integraciones/manual-api-catalogo.md`). Normaliza trim/vacío→null.
+- **Robustez del índice único (una fila mala NO aborta el lote):** `importarProductos` resuelve colisiones antes de escribir (dedup en lote + choque contra la base → descarta el código de esa fila y lo informa en `errores`). `bulkUpsert` es resiliente por fila y devuelve `errores`. `upsertProducto` traduce el P2002 del índice fierro a un 400 claro (verificando `meta.target`).
+- **Front:** columna "Cód. Fierro" + campo opcional en el alta del catálogo; búsqueda server-side por este código. `ProductoResuelto` incluye `codigoFierro`.
+- **Verificación:** 140 tests API en verde + typecheck web/api; `/code-review` (2 finders + verify) aplicado → fix de robustez en `bulkUpsert` y hardening del handler P2002.
+
+### Importador de artículos del cliente por ISBN o código de Fierro
+- El importador Excel/CSV de la declaración (`previsualizarImportacion`) ahora identifica cada artículo por **ISBN (principal)** o, si no matchea, por **código de Fierro** (`catalogo.resolverPorCodigoFierroBatch`, match case-insensitive). Las líneas viajan por el ISBN canónico → `declarar()`/consignación sin cambios. `LineaImportada.via` ('isbn'|'fierro') + badge "vía Fierro" en la UI. Autodetección de columna ampliada (`fierro|artículo|sku`).
+- 143 tests API en verde; `/code-review` (1 finder) → fix real de case-insensitivity; resto por diseño. Ver [[devoluciones-import-excel]].
+
 ## Próximos pasos (roadmap CLAUDE.md)
 1. **Ubicaciones** (`ubi_*`): al conectarlo, cambiar UNA línea en `devoluciones.module.ts` (`provide: UBICACION_RESOLVER`).
 2. **Integraciones** (`int_*`) antes del primer sync externo.

@@ -24,6 +24,12 @@ export class ProductoDto {
   @MaxLength(60)
   codigoInterno?: string;
 
+  /** Código interno del producto en el ERP (Fierro). Opcional y único. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  codigoFierro?: string;
+
   @IsString()
   @MinLength(1)
   @MaxLength(300)
@@ -93,6 +99,16 @@ export class ProductoImportDto {
   @IsString()
   @MaxLength(200)
   editorial?: string;
+
+  /**
+   * Código interno del producto en el ERP (Fierro). Opcional. Único en el WMS:
+   * si el mismo código llega asignado a otro ISBN se informa en `errores` y no
+   * aborta el lote (ver catalogo.service.importarProductos).
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  codigoFierro?: string;
 }
 
 export class ProductosImportarDto {

@@ -148,6 +148,11 @@ model Cliente {
 model Producto {
   id            Int      @id @default(autoincrement())
   codigoInterno String   @unique @map("codigo_interno") @db.VarChar(60)
+  // Código interno del producto en el ERP (Fierro). Opcional (los ítems sin ISBN
+  // o aún no mapeados en el ERP no lo tienen). @unique: identifica un producto en
+  // Fierro → habilita lookup y matcheo de lotes/export por este código. MySQL
+  // permite múltiples NULL en un índice único, así conviven productos sin código.
+  codigoFierro  String?  @unique @map("codigo_fierro") @db.VarChar(60)
   titulo        String   @db.VarChar(300)
   editorial     String?  @db.VarChar(200)
   autor         String?  @db.VarChar(200)

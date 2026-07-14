@@ -1,7 +1,8 @@
 # Manual de integración — Importación de Catálogo de Productos (WMS Grupal)
 
 > **Audiencia:** equipo del sistema externo (ERP/integrador) que enviará el catálogo de libros al WMS.
-> **Versión:** 1.0 (2026-06-14) · Contrato estable: cambios se avisan y se versionan.
+> **Versión:** 1.1 (2026-07-14) · Contrato estable: cambios se avisan y se versionan.
+> **Novedad 1.1:** campo opcional `codigoFierro` (código interno del producto en el ERP Fierro).
 
 ## 1. Datos generales
 
@@ -58,7 +59,7 @@ Content-Type: application/json
 ```json
 {
   "productos": [
-    { "isbn": "9789875668249", "titulo": "El Aleph", "editorial": "Emecé" },
+    { "isbn": "9789875668249", "titulo": "El Aleph", "editorial": "Emecé", "codigoFierro": "ART-000123" },
     { "isbn": "9788437604947", "titulo": "Cien años de soledad", "editorial": "Cátedra" }
   ]
 }
@@ -71,8 +72,11 @@ Content-Type: application/json
 | `isbn` | string | **Sí** | EAN-13 (se acepta ISBN-10/13, con o sin guiones; se normaliza). **Clave de identidad**: si ya está catalogado, se ACTUALIZA; si no, se CREA. Un ISBN inválido se rechaza fila por fila (ver `errores`), no aborta el lote. |
 | `titulo` | string | **Sí** | Máx. 300 caracteres. |
 | `editorial` | string | No | Máx. 200 caracteres. Si se omite en una actualización, queda en blanco (enviar siempre el dato completo). |
+| `codigoFierro` | string | No | Código interno del producto en el ERP (Fierro). Máx. 60 caracteres. **Único** en el WMS: identifica un producto. Si el mismo código llega asignado a **otro** ISBN (o duplicado dentro del lote), esa fila se informa en `errores` y el código se **descarta** para ella (el resto de sus datos igual se aplica), sin abortar el lote. Vacío o ausente → el producto queda **sin** código Fierro. |
 
-> **Solo ISBN, Título y Editorial.** El WMS no requiere código interno: el ISBN actúa como identificador maestro del producto. Otros atributos del modelo (autor, unidades por caja/pallet) quedan con sus valores por defecto y no se gestionan por esta vía.
+> **ISBN + Título obligatorios.** El WMS no requiere código interno propio: el ISBN actúa como identificador maestro. `editorial` y `codigoFierro` son opcionales. Otros atributos del modelo (autor, unidades por caja/pallet) quedan con sus valores por defecto y no se gestionan por esta vía.
+>
+> **`codigoFierro`** permite al WMS mapear cada libro con su ficha en el ERP (matcheo de lotes, export de devoluciones). Es la vía recomendada para enviarlo: idempotente y por lote junto al resto del catálogo.
 
 ### Semántica (importante)
 

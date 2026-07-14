@@ -16,10 +16,35 @@ const SUBCARPETA_PRODUCTOS = 'productos';
 export interface ProductoResuelto {
   id: number;
   codigoInterno: string;
+  codigoFierro: string | null;
   titulo: string;
   editorial: string | null;
   imagenUrl: string | null;
   isbn: string;
+}
+
+/**
+ * Producto resuelto por su código interno de Fierro (ERP). `isbnCanonico` es el
+ * ISBN con el que el producto viaja por el circuito de devoluciones (null si el
+ * producto no tiene ISBN asociado).
+ */
+export interface ProductoPorFierro {
+  id: number;
+  codigoInterno: string;
+  codigoFierro: string;
+  titulo: string;
+  editorial: string | null;
+  imagenUrl: string | null;
+  isbnCanonico: string | null;
+}
+
+/**
+ * Normaliza el código interno de Fierro: trim y string vacío → null (un texto en
+ * blanco NO debe reservar el índice único ni "asignar" el producto en el ERP).
+ */
+export function normalizarCodigoFierro(v: string | null | undefined): string | null {
+  const s = v?.trim();
+  return s ? s : null;
 }
 
 @Injectable()
@@ -53,31 +78,53 @@ export class CatalogoService {
       );
     }
 
-    const producto = await this.prisma.producto.upsert({
-      where: { codigoInterno },
-      create: {
-        codigoInterno,
-        titulo: dto.titulo,
-        editorial: dto.editorial ?? null,
-        autor: dto.autor ?? null,
-        unidadBase: dto.unidadBase ?? 'unidad',
-        equivCaja: dto.equivCaja ?? 1,
-        equivPallet: dto.equivPallet ?? 1,
-        activo: dto.activo ?? true,
-      },
-      update: {
-        titulo: dto.titulo,
-        editorial: dto.editorial ?? null,
-        autor: dto.autor ?? null,
-        unidadBase: dto.unidadBase ?? 'unidad',
-        equivCaja: dto.equivCaja ?? 1,
-        equivPallet: dto.equivPallet ?? 1,
-        ...(dto.activo !== undefined ? { activo: dto.activo } : {}),
-      },
-      // Solo el id: el alta NO depende de columnas de imagen (la portada es
-      // opcional y va por otra vía), así no se acopla a imagen_url.
-      select: { id: true },
-    });
+    const codigoFierro = normalizarCodigoFierro(dto.codigoFierro);
+
+    let producto: { id: number };
+    try {
+      producto = await this.prisma.producto.upsert({
+        where: { codigoInterno },
+        create: {
+          codigoInterno,
+          codigoFierro,
+          titulo: dto.titulo,
+          editorial: dto.editorial ?? null,
+          autor: dto.autor ?? null,
+          unidadBase: dto.unidadBase ?? 'unidad',
+          equivCaja: dto.equivCaja ?? 1,
+          equivPallet: dto.equivPallet ?? 1,
+          activo: dto.activo ?? true,
+        },
+        update: {
+          codigoFierro,
+          titulo: dto.titulo,
+          editorial: dto.editorial ?? null,
+          autor: dto.autor ?? null,
+          unidadBase: dto.unidadBase ?? 'unidad',
+          equivCaja: dto.equivCaja ?? 1,
+          equivPallet: dto.equivPallet ?? 1,
+          ...(dto.activo !== undefined ? { activo: dto.activo } : {}),
+        },
+        // Solo el id: el alta NO depende de columnas de imagen (la portada es
+        // opcional y va por otra vía), así no se acopla a imagen_url.
+        select: { id: true },
+      });
+    } catch (e) {
+      // P2002 = violación de índice único. Solo lo traducimos a un 400 claro si
+      // el índice violado es el de codigoFierro (el de codigoInterno es la clave
+      // del upsert, no puede chocar acá). Cualquier otro P2002 futuro se relanza
+      // tal cual en vez de reportar un mensaje de Fierro equivocado.
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002' &&
+        this.esViolacionCodigoFierro(e)
+      ) {
+        throw new BadRequestException(
+          `El código Fierro "${codigoFierro}" ya está asignado a otro producto`,
+        );
+      }
+      throw e;
+    }
 
     // Sincroniza ISBNs: agrega los nuevos (un ISBN pertenece a un solo producto).
     for (const isbn of validos) {
@@ -91,21 +138,49 @@ export class CatalogoService {
     return { id: producto.id, isbnsInvalidos: invalidos };
   }
 
-  async bulkUpsert(
-    productos: ProductoDto[],
-  ): Promise<{ procesados: number; isbnsInvalidos: string[] }> {
+  /**
+   * True si el P2002 corresponde al índice único de `codigoFierro`. Prisma expone
+   * el índice/columnas en `meta.target` (string con el nombre del índice en MySQL
+   * o array de campos), así que se busca la marca en cualquiera de las dos formas.
+   */
+  private esViolacionCodigoFierro(
+    e: Prisma.PrismaClientKnownRequestError,
+  ): boolean {
+    const target = e.meta?.target;
+    const texto = Array.isArray(target) ? target.join(',') : String(target ?? '');
+    return texto.includes('codigo_fierro') || texto.includes('codigoFierro');
+  }
+
+  async bulkUpsert(productos: ProductoDto[]): Promise<{
+    procesados: number;
+    isbnsInvalidos: string[];
+    errores: { codigoInterno?: string; error: string }[];
+  }> {
     let procesados = 0;
     const isbnsInvalidos: string[] = [];
+    const errores: { codigoInterno?: string; error: string }[] = [];
     // Concurrencia acotada (5 a la vez): reduce el wall-clock del lote sin
     // saturar el pool de conexiones ni arriesgar choques de ISBN entre filas.
     for (const bloque of enBloques(productos, 5)) {
-      const res = await Promise.all(bloque.map((p) => this.upsertProducto(p)));
-      for (const r of res) {
-        procesados++;
-        isbnsInvalidos.push(...r.isbnsInvalidos);
-      }
+      await Promise.all(
+        bloque.map(async (p) => {
+          try {
+            const ok = await this.upsertProducto(p);
+            procesados++;
+            isbnsInvalidos.push(...ok.isbnsInvalidos);
+          } catch (e) {
+            // Una fila que falla (p. ej. código Fierro ya asignado a otro
+            // producto, incluida la carrera entre dos filas del mismo bloque)
+            // NO aborta el lote: se informa y el resto continúa.
+            errores.push({
+              codigoInterno: p.codigoInterno,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+        }),
+      );
     }
-    return { procesados, isbnsInvalidos };
+    return { procesados, isbnsInvalidos, errores };
   }
 
   /**
@@ -125,14 +200,25 @@ export class CatalogoService {
 
     // 1) Normalizar ISBN y descartar inválidos (sin abortar el lote). Dedup por
     //    ISBN (la última fila gana) para no procesar el mismo dos veces.
-    const porIsbn = new Map<string, { isbn: string; titulo: string; editorial: string | null }>();
+    interface Fila {
+      isbn: string;
+      titulo: string;
+      editorial: string | null;
+      codigoFierro: string | null;
+    }
+    const porIsbn = new Map<string, Fila>();
     for (const item of items) {
       const isbn = normalizarIsbn(item.isbn);
       if (!isbn) {
         errores.push({ isbn: item.isbn, error: 'ISBN inválido' });
         continue;
       }
-      porIsbn.set(isbn, { isbn, titulo: item.titulo, editorial: item.editorial ?? null });
+      porIsbn.set(isbn, {
+        isbn,
+        titulo: item.titulo,
+        editorial: item.editorial ?? null,
+        codigoFierro: normalizarCodigoFierro(item.codigoFierro),
+      });
     }
     const unicos = [...porIsbn.values()];
 
@@ -147,6 +233,13 @@ export class CatalogoService {
       for (const f of filas) productoPorIsbn.set(f.isbn, f.productoId);
     }
 
+    // 2.b) Resolver colisiones del código Fierro (índice único) ANTES de escribir:
+    //      así una asignación duplicada del ERP no aborta el lote (INSERT IGNORE
+    //      saltearía el producto entero; una update chocaría la transacción).
+    //      El código que colisiona se descarta (queda null) y se informa en
+    //      `errores`; el resto de esa fila (título/editorial) igual se aplica.
+    await this.resolverColisionesFierro(unicos, productoPorIsbn, errores);
+
     // 3) Actualizar los existentes: varias updates por transacción.
     const existentes = unicos.filter((v) => productoPorIsbn.has(v.isbn));
     let actualizados = 0;
@@ -155,7 +248,11 @@ export class CatalogoService {
         bloque.map((v) =>
           this.prisma.producto.update({
             where: { id: productoPorIsbn.get(v.isbn)! },
-            data: { titulo: v.titulo, editorial: v.editorial },
+            data: {
+              titulo: v.titulo,
+              editorial: v.editorial,
+              codigoFierro: v.codigoFierro,
+            },
             select: { id: true },
           }),
         ),
@@ -172,6 +269,7 @@ export class CatalogoService {
       const alta = await this.prisma.producto.createMany({
         data: bloque.map((v) => ({
           codigoInterno: v.isbn,
+          codigoFierro: v.codigoFierro,
           titulo: v.titulo,
           editorial: v.editorial,
         })),
@@ -195,6 +293,65 @@ export class CatalogoService {
     }
 
     return { recibidos: items.length, creados, actualizados, errores };
+  }
+
+  /**
+   * Desactiva (pone en null) los códigos Fierro del lote que colisionarían con el
+   * índice único, informando cada caso en `errores`. Muta `filas[].codigoFierro`.
+   * Dos fuentes de colisión:
+   *   a) Duplicado dentro del mismo lote (dos ISBN con el mismo código): gana el
+   *      último; los anteriores pierden el código.
+   *   b) Código ya asignado en la base a OTRO producto (distinto al de este ISBN).
+   */
+  private async resolverColisionesFierro(
+    filas: { isbn: string; codigoFierro: string | null }[],
+    productoPorIsbn: Map<string, number>,
+    errores: { isbn: string; error: string }[],
+  ): Promise<void> {
+    // a) Dedup dentro del lote: último gana.
+    const ganadorPorCodigo = new Map<string, string>(); // codigoFierro -> isbn
+    for (const f of filas) {
+      if (f.codigoFierro) ganadorPorCodigo.set(f.codigoFierro, f.isbn);
+    }
+    for (const f of filas) {
+      if (f.codigoFierro && ganadorPorCodigo.get(f.codigoFierro) !== f.isbn) {
+        errores.push({
+          isbn: f.isbn,
+          error: `Código Fierro "${f.codigoFierro}" duplicado en el lote`,
+        });
+        f.codigoFierro = null;
+      }
+    }
+
+    // b) Choque contra la base: buscar el dueño actual de cada código y, si es un
+    //    producto distinto al que corresponde a este ISBN, descartar el código.
+    const codigos = [
+      ...new Set(filas.map((f) => f.codigoFierro).filter((c): c is string => !!c)),
+    ];
+    if (codigos.length === 0) return;
+
+    const duenoPorCodigo = new Map<string, number>(); // codigoFierro -> productoId
+    for (const bloque of enBloques(codigos, 1000)) {
+      const prods = await this.prisma.producto.findMany({
+        where: { codigoFierro: { in: bloque } },
+        select: { id: true, codigoFierro: true },
+      });
+      for (const p of prods) {
+        if (p.codigoFierro) duenoPorCodigo.set(p.codigoFierro, p.id);
+      }
+    }
+    for (const f of filas) {
+      if (!f.codigoFierro) continue;
+      const dueno = duenoPorCodigo.get(f.codigoFierro);
+      const propio = productoPorIsbn.get(f.isbn); // undefined si es alta nueva
+      if (dueno !== undefined && dueno !== propio) {
+        errores.push({
+          isbn: f.isbn,
+          error: `Código Fierro "${f.codigoFierro}" ya asignado a otro producto`,
+        });
+        f.codigoFierro = null;
+      }
+    }
   }
 
   /** Longitud mínima de token para FULLTEXT (innodb_ft_min_token_size = 3). */
@@ -247,6 +404,7 @@ export class CatalogoService {
         OR: [
           porTitulo,
           { codigoInterno: { startsWith: qLike } },
+          { codigoFierro: { startsWith: qLike } },
           { isbns: { some: { isbn: { startsWith: qLike } } } },
         ],
       };
@@ -409,6 +567,7 @@ export class CatalogoService {
     return {
       id: fila.producto.id,
       codigoInterno: fila.producto.codigoInterno,
+      codigoFierro: fila.producto.codigoFierro,
       titulo: fila.producto.titulo,
       editorial: fila.producto.editorial,
       imagenUrl: fila.producto.imagenUrl,
@@ -453,6 +612,7 @@ export class CatalogoService {
         {
           id: f.producto.id,
           codigoInterno: f.producto.codigoInterno,
+          codigoFierro: f.producto.codigoFierro,
           titulo: f.producto.titulo,
           editorial: f.producto.editorial,
           imagenUrl: f.producto.imagenUrl,
@@ -460,5 +620,50 @@ export class CatalogoService {
         },
       ]),
     );
+  }
+
+  /**
+   * Resuelve VARIOS códigos internos de Fierro (ERP) a producto en UNA query.
+   * Alternativa al ISBN cuando el cliente identifica el artículo por su código de
+   * Fierro. Como el circuito de devoluciones viaja por ISBN, se calcula el **ISBN
+   * canónico** del producto: se prefiere un ISBN realmente **vinculado** (así
+   * declarar(), que resuelve por la tabla de ISBN, lo encuentra sí o sí) y, si no
+   * tiene ninguno, se cae al código interno cuando este es un ISBN válido (los
+   * altas por import usan el ISBN como código interno). Es `null` si el producto
+   * no tiene ISBN (combos): el caller decide qué hacer. El Map se indexa por el
+   * código Fierro en MAYÚSCULAS (el índice único de MySQL es case-insensitive, así
+   * que el match se hace case-insensitive para no perder un producto por diferencia
+   * de capitalización entre el archivo del cliente y lo cargado por el ERP).
+   */
+  async resolverPorCodigoFierroBatch(
+    codigos: string[],
+  ): Promise<Map<string, ProductoPorFierro>> {
+    const norms = [
+      ...new Set(
+        codigos
+          .map((c) => normalizarCodigoFierro(c))
+          .filter((c): c is string => !!c),
+      ),
+    ];
+    if (norms.length === 0) return new Map();
+    const prods = await this.prisma.producto.findMany({
+      where: { codigoFierro: { in: norms } },
+      include: { isbns: { select: { isbn: true }, orderBy: { id: 'asc' }, take: 1 } },
+    });
+    const m = new Map<string, ProductoPorFierro>();
+    for (const p of prods) {
+      if (!p.codigoFierro) continue;
+      const isbnCanonico = p.isbns[0]?.isbn ?? normalizarIsbn(p.codigoInterno);
+      m.set(p.codigoFierro.toUpperCase(), {
+        id: p.id,
+        codigoInterno: p.codigoInterno,
+        codigoFierro: p.codigoFierro,
+        titulo: p.titulo,
+        editorial: p.editorial,
+        imagenUrl: p.imagenUrl,
+        isbnCanonico,
+      });
+    }
+    return m;
   }
 }

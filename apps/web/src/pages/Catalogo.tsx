@@ -8,6 +8,7 @@ import { DataGrid } from '../components/grilla/DataGrid';
 interface Producto {
   id: number;
   codigoInterno: string;
+  codigoFierro: string | null;
   titulo: string;
   editorial: string | null;
   imagenUrl: string | null;
@@ -22,7 +23,7 @@ export function Catalogo() {
   const [q, setQ] = useState('');
   const [page, setPage] = useState(0);
   const [creando, setCreando] = useState(false);
-  const [form, setForm] = useState({ isbn: '', titulo: '', editorial: '' });
+  const [form, setForm] = useState({ isbn: '', titulo: '', editorial: '', codigoFierro: '' });
   const [error, setError] = useState<string | null>(null);
   const [subiendo, setSubiendo] = useState<number | null>(null);
   const debounce = useRef<ReturnType<typeof setTimeout>>();
@@ -68,9 +69,10 @@ export function Catalogo() {
       await api.post('/catalogo/productos', {
         titulo: form.titulo,
         editorial: form.editorial || undefined,
+        codigoFierro: form.codigoFierro.trim() || undefined,
         isbns: form.isbn.split(/[\s,]+/).filter(Boolean),
       });
-      setForm({ isbn: '', titulo: '', editorial: '' });
+      setForm({ isbn: '', titulo: '', editorial: '', codigoFierro: '' });
       setCreando(false);
       void cargar(q, page);
     } catch (err) {
@@ -140,6 +142,14 @@ export function Catalogo() {
           <span className="tabnum">{row.original.isbns.map((i) => i.isbn).join(', ') || '—'}</span>
         ),
       },
+      {
+        id: 'codigoFierro',
+        header: 'Cód. Fierro',
+        accessorFn: (p) => p.codigoFierro ?? '',
+        cell: ({ row }) => (
+          <span className="tabnum text-slate-500">{row.original.codigoFierro ?? '—'}</span>
+        ),
+      },
       { id: 'titulo', header: 'Título', accessorKey: 'titulo' },
       {
         id: 'editorial',
@@ -173,7 +183,7 @@ export function Catalogo() {
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
         <input
           className="input pl-9 pr-9"
-          placeholder="Buscar por título, ISBN o código…"
+          placeholder="Buscar por título, ISBN, código o cód. Fierro…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
@@ -194,6 +204,7 @@ export function Catalogo() {
             <Field label="ISBN"><input className="input tabnum" value={form.isbn} onChange={(e) => setForm({ ...form, isbn: e.target.value })} required /></Field>
             <Field label="Título"><input className="input" value={form.titulo} onChange={(e) => setForm({ ...form, titulo: e.target.value })} required /></Field>
             <Field label="Editorial"><input className="input" value={form.editorial} onChange={(e) => setForm({ ...form, editorial: e.target.value })} /></Field>
+            <Field label="Cód. Fierro (ERP)"><input className="input tabnum" value={form.codigoFierro} onChange={(e) => setForm({ ...form, codigoFierro: e.target.value })} placeholder="Opcional" /></Field>
             <div className="sm:col-span-2 flex gap-3">
               <button className="btn-accent" type="submit">Guardar</button>
               {error && <p className="text-sm text-red-600 self-center">{error}</p>}
